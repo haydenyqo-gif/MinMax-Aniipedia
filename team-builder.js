@@ -63,6 +63,8 @@
   const PERSONALITY_OPTIONS = Object.freeze([
     Object.freeze({
       id: "clingy",
+      code: "E",
+      pair: "E/I",
       label: "Clingy",
       effects: Object.freeze([
         Object.freeze({ label: "Attack", value: 0.02 }),
@@ -71,41 +73,55 @@
     }),
     Object.freeze({
       id: "instinctive",
+      code: "I",
+      pair: "E/I",
       label: "Instinctive",
       effects: Object.freeze([Object.freeze({ label: "EP Regen", value: 0.05 })]),
     }),
     Object.freeze({
       id: "practical",
+      code: "S",
+      pair: "S/N",
       label: "Practical",
       effects: Object.freeze([Object.freeze({ label: "Damage Amp", value: 0.04 })]),
     }),
     Object.freeze({
       id: "perspicacious",
+      code: "N",
+      pair: "S/N",
       label: "Perspicacious",
       effects: Object.freeze([Object.freeze({ label: "Critical Rate", value: 0.04 })]),
     }),
     Object.freeze({
       id: "aloof",
+      code: "T",
+      pair: "T/F",
       label: "Aloof",
       effects: Object.freeze([Object.freeze({ label: "Defense", value: 0.06 })]),
     }),
     Object.freeze({
       id: "faithful",
+      code: "F",
+      pair: "T/F",
       label: "Faithful",
       effects: Object.freeze([Object.freeze({ label: "Magic Defense", value: 0.06 })]),
     }),
     Object.freeze({
       id: "obedient",
+      code: "J",
+      pair: "J/P",
       label: "Obedient",
       effects: Object.freeze([Object.freeze({ label: "HP", value: 0.04 })]),
     }),
     Object.freeze({
       id: "spontaneous",
+      code: "P",
+      pair: "J/P",
       label: "Spontaneous",
       effects: Object.freeze([Object.freeze({ label: "Damage Reduction", value: 0.04 })]),
     }),
   ]);
-  const MAX_PERSONALITY_TRAITS = 4;
+  const PERSONALITY_PAIRS = Object.freeze(["E/I", "S/N", "T/F", "J/P"]);
 
   let sidebar = null;
   let panel = null;
@@ -127,6 +143,7 @@
       stage: 7,
       activeSkills: ["", ""],
       switchSkill: "",
+      ultimateSkill: "",
       personalities: [],
       potentials: Object.fromEntries(POTENTIAL_STATS.map((stat) => [stat.key, 0])),
       awakeningBonus: 0,
@@ -150,11 +167,18 @@
       ? value.activeSkills.slice(0, MAX_ACTIVE_SKILLS).map((skill) => String(skill || ""))
       : base.activeSkills;
     while (activeSkills.length < MAX_ACTIVE_SKILLS) activeSkills.push("");
-    const personalities = Array.isArray(value?.personalities)
-      ? [...new Set(value.personalities.map((trait) => String(trait || "")).filter(Boolean))]
-        .filter((trait) => PERSONALITY_OPTIONS.some((option) => option.id === trait))
-        .slice(0, MAX_PERSONALITY_TRAITS)
-      : [];
+    const selectedPersonalityPairs = new Map();
+    if (Array.isArray(value?.personalities)) {
+      value.personalities.forEach((trait) => {
+        const option = PERSONALITY_OPTIONS.find((candidate) => candidate.id === String(trait || ""));
+        if (option && !selectedPersonalityPairs.has(option.pair)) {
+          selectedPersonalityPairs.set(option.pair, option.id);
+        }
+      });
+    }
+    const personalities = PERSONALITY_PAIRS
+      .map((pair) => selectedPersonalityPairs.get(pair))
+      .filter(Boolean);
     const potentials = Object.fromEntries(POTENTIAL_STATS.map((stat) => {
       const amount = Number(value?.potentials?.[stat.key]);
       return [stat.key, Math.min(MAX_POTENTIAL_PER_STAT, Math.max(0, Number.isFinite(amount) ? Math.round(amount) : 0))];
@@ -166,6 +190,7 @@
       stage: Math.min(7, Math.max(1, Number(value?.stage) || 7)),
       activeSkills,
       switchSkill: String(value?.switchSkill || ""),
+      ultimateSkill: String(value?.ultimateSkill || ""),
       personalities,
       potentials,
       awakeningBonus: Math.min(
@@ -384,6 +409,7 @@
         stage: member.stage,
         activeSkills: member.activeSkills,
         switchSkill: member.switchSkill,
+        ultimateSkill: member.ultimateSkill,
         personalities: member.personalities,
         potentials: member.potentials,
         awakeningBonus: member.awakeningBonus,
@@ -474,7 +500,8 @@
       loadout.updatedAt = new Date().toISOString();
       loadout.sourceShareId = "";
       model = loadout.model;
-      persistLoadoutStore();
+      model.members.forEach(validateMember);
+      persist();
       shareStatus = `${loadout.name} was overwritten by the imported team.`;
     } catch (error) {
       shareStatus = error instanceof Error ? error.message : String(error);
@@ -673,6 +700,10 @@
     return combatSkills(entry).find((skill) => skillKey(skill) === String(key || "")) || null;
   }
 
+  function ultimateFor(entry, key) {
+    return (entry?.ultimates || []).find((skill) => skillKey(skill) === String(key || "")) || null;
+  }
+
   function mechanicsFor(entry, skill, section = "skills") {
     const formId = String(entry?.form_id || entry?.id || "").replace(/^aniimo:/, "");
     const name = String(skill?.name || "");
@@ -710,6 +741,7 @@
     member.switchSkill = coreSkills(entry)
       .map(skillKey)
       .find((key) => !defaults.includes(key)) || "";
+    member.ultimateSkill = (entry?.ultimates || []).map(skillKey).find(Boolean) || "";
     member.personalities = [];
     member.level = MAX_ANIIMO_LEVEL;
     member.stage = 7;
@@ -732,6 +764,11 @@
     });
     const allowedSwitch = new Set(coreSkills(entry).map(skillKey));
     if (!allowedSwitch.has(member.switchSkill) || seen.has(member.switchSkill)) member.switchSkill = "";
+    const ultimateKeys = new Set((entry.ultimates || []).map(skillKey));
+    if (!ultimateKeys.has(member.ultimateSkill)) {
+      member.ultimateSkill = (entry.ultimates || []).map(skillKey).find(Boolean) || "";
+    }
+    member.personalities = normalizeMember({ personalities: member.personalities }).personalities;
     member.stage = Math.min(member.stage, maxStageForLevel(member.level));
     const item = carriedItemFor(member);
     if (!item) {
@@ -1029,6 +1066,23 @@
       persist();
       render();
     }, "team-field--wide"));
+    const ultimates = entry.ultimates || [];
+    const ultimateOptions = [
+      {
+        value: "",
+        label: ultimates.length ? "Choose an Ultimate" : "No Ultimate available",
+      },
+      ...ultimates.map((skill) => ({
+        value: skillKey(skill),
+        label: translate(skill.name),
+      })),
+    ];
+    grid.append(selectControl("Ultimate", ultimateOptions, member.ultimateSkill, (value) => {
+      member.ultimateSkill = value;
+      validateMember(member);
+      persist();
+      render();
+    }, "team-field--wide"));
     section.append(grid);
 
     const selected = [...member.activeSkills, member.switchSkill]
@@ -1044,6 +1098,12 @@
       )));
       section.append(cards);
     }
+    const ultimate = ultimateFor(entry, member.ultimateSkill);
+    if (ultimate) {
+      const cards = section.querySelector(".team-skill-cards") || el("div", "team-skill-cards");
+      cards.append(renderSkillSummary(ultimate, "Ultimate", entry, "ultimates"));
+      if (!cards.parentElement) section.append(cards);
+    }
     return section;
   }
 
@@ -1058,8 +1118,8 @@
     return [...new Set(values)].map(format).join(" / ");
   }
 
-  function renderReviewedMechanics(entry, skill) {
-    const reviewed = mechanicsFor(entry, skill);
+  function renderReviewedMechanics(entry, skill, mechanicsSection = "skills") {
+    const reviewed = mechanicsFor(entry, skill, mechanicsSection);
     const section = el("div", "team-skill-mechanics");
     if (!reviewed) {
       section.append(el(
@@ -1113,7 +1173,7 @@
     return section;
   }
 
-  function renderSkillSummary(skill, slotLabel, entry) {
+  function renderSkillSummary(skill, slotLabel, entry, mechanicsSection = "skills") {
     const card = el("article", "team-skill-summary");
     if (skill?.icon) {
       const icon = el("img", "team-skill-icon");
@@ -1141,7 +1201,7 @@
         [skill.behavior.team_role, scope].filter(Boolean).join(" · "),
       ));
     }
-    copy.append(renderReviewedMechanics(entry, skill));
+    copy.append(renderReviewedMechanics(entry, skill, mechanicsSection));
     if (skill?.description) {
       const description = el("details", "team-skill-description");
       description.append(
@@ -1239,7 +1299,7 @@
     const personalityHeading = el("div", "team-subsection-heading");
     personalityHeading.append(
       el("strong", "", "Personality combat bonuses"),
-      el("small", "", `${member.personalities.length} / ${MAX_PERSONALITY_TRAITS}`),
+      el("small", "", `${member.personalities.length} / ${PERSONALITY_PAIRS.length} pairs selected`),
     );
     section.append(personalityHeading);
     const personalityGrid = el("div", "team-personality-grid");
@@ -1250,10 +1310,12 @@
       const input = document.createElement("input");
       input.type = "checkbox";
       input.checked = selected;
-      input.disabled = !selected && member.personalities.length >= MAX_PERSONALITY_TRAITS;
       input.addEventListener("change", () => {
         if (input.checked) {
-          member.personalities = [...member.personalities, option.id].slice(0, MAX_PERSONALITY_TRAITS);
+          member.personalities = [
+            ...member.personalities.filter((trait) => personalityFor(trait)?.pair !== option.pair),
+            option.id,
+          ];
         } else {
           member.personalities = member.personalities.filter((trait) => trait !== option.id);
         }
@@ -1264,7 +1326,7 @@
         `${translate(effect.label)} +${formatValue(effect.value, true)}`
       )).join(", ");
       const copy = el("span", "team-personality-copy");
-      copy.append(el("strong", "", option.label), el("small", "", effects));
+      copy.append(el("strong", "", `${option.code} · ${option.label}`), el("small", "", effects));
       choice.append(input, copy);
       personalityGrid.append(choice);
     });
@@ -1666,13 +1728,16 @@
             "Active",
             skill.behavior,
           ));
-        (entry.ultimates || []).forEach((skill) => append(
-          "Ultimate",
-          skill.name,
-          skill.description,
-          "Active",
-          skill.behavior,
-        ));
+        const ultimate = ultimateFor(entry, member.ultimateSkill);
+        if (ultimate) {
+          append(
+            "Ultimate",
+            ultimate.name,
+            ultimate.description,
+            "Active",
+            ultimate.behavior,
+          );
+        }
       }
       const carried = carriedItemFor(member);
       (carried?.carried_effects?.core_effects || []).forEach((description, effectIndex) => append("Carried item", carried.name, description, `Core effect ${effectIndex + 1}`));
@@ -1798,6 +1863,8 @@
     renderLoading();
     await ensureData();
     await loadRequestedTeamShare();
+    model.members.forEach(validateMember);
+    persist();
     render();
   }
 
