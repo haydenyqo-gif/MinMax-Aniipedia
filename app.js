@@ -1,8 +1,10 @@
 const DATA_URL = "./data/map_site_data.json?v=20260720-fixed-collectible-links-v001";
 const CHECKLIST_URL = "./data/checklist_data.json?v=20260719-lumen-embers-v001";
-const ITEMLOG_DATA_URL = "./data/itemlog_data.json?v=20260721-item-enrichment-v001";
+const ITEMLOG_DATA_URL =
+  window.ANIIPEDIA_CONFIG?.itemDataUrl ||
+  "./data/itemlog_data.json?v=20260725-catalog-v003";
 const ANIILOG_DATA_URL = "./data/aniilog_data.json?v=20260721-skill-behavior-v001";
-const APP_VERSION = "v0.5.23";
+const APP_VERSION = "v0.5.24";
 const GITHUB_COMMITS_URL = "https://api.github.com/repos/donneeee/MinMax-Aniipedia/commits?sha=main&per_page=30";
 const CHANGELOG_INTERNAL_MARKER_RE = /\[(?:skip changelog|internal)\]/i;
 const CHANGELOG_PUBLIC_ENTRY_LIMIT = 12;
@@ -3819,6 +3821,15 @@ function renderCatalogHomelandLevels(entries) {
   section.classList.add("catalog-section--compact", "catalog-homeland-section");
   addCatalogSectionInfo(section, "About Homeland abilities", [
     "Homeland abilities are fixed by Aniimo form. Each facility task requires an ability type and level.",
+    "Personality Home bonuses are separate from combat bonuses. Each Aniimo has one personality from each opposing pair: E or I, S or N, T or F, and J or P.",
+    "E · Clingy — Bouncy Brew Keg: +20% work efficiency.",
+    "I · Instinctive — Phonolfactory Table: +20% work efficiency.",
+    "S · Practical — Claw Game Cooker: +20% work efficiency.",
+    "N · Perspicacious — Jukebox Dryer: +20% work efficiency.",
+    "T · Aloof — Carousel Mill: +20% work efficiency.",
+    "F · Faithful — Joy Wheel Loom: +20% work efficiency.",
+    "J · Obedient — Crafting Table: +20% work efficiency.",
+    "P · Spontaneous — Mineral Pile: +20% work efficiency.",
     "Homeland personality fit is separate from combat personality bonuses. It depends on the individual Aniimo's personality and the selected facility.",
     "A matching personality applies a 1.2x modifier to the facility workload calculation. Two Aniimo of the same form can therefore perform differently.",
     "Combat bonuses such as ATK, HP, or Damage Amp do not determine Homeland personality fit.",

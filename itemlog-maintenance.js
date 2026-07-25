@@ -1,6 +1,8 @@
 (() => {
   "use strict";
 
+  if (window.ANIIPEDIA_CONFIG?.view === 1) return;
+
   const ITEMLOG_LABEL_RE = /\bitem[\s-]?log\b/i;
   const ITEMLOG_SELECTORS = [
     "#itemlogWorkspaceTab",

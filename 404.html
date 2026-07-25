@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>MinMax's Aniipedia</title>
+</head>
+<body>
+  <script>
+    (() => {
+      const parts = window.location.pathname.split("/").filter(Boolean);
+      const base = parts.length > 1 ? `/${parts[0]}/` : "/";
+      fetch(`${base}index.html`, { cache: "no-cache" })
+        .then((response) => {
+          if (!response.ok) throw new Error(String(response.status));
+          return response.text();
+        })
+        .then((html) => {
+          document.open();
+          document.write(html.replace("<head>", `<head><base href="${base}">`));
+          document.close();
+        })
+        .catch(() => window.location.replace(base));
+    })();
+  </script>
+</body>
+</html>

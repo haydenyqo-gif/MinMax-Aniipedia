@@ -2,7 +2,9 @@
   "use strict";
 
   const ANIILOG_URL = "./data/aniilog_data.json?v=20260721-skill-behavior-v001";
-  const ITEMLOG_URL = "./data/itemlog_data.json?v=20260721-item-enrichment-v001";
+  const ITEMLOG_URL =
+    window.ANIIPEDIA_CONFIG?.itemDataUrl ||
+    "./data/itemlog_data.json?v=20260725-catalog-v003";
   const MECHANICS_URL = "./data/team_builder_mechanics.json?v=20260723-reviewed-v001";
   const LEGACY_STORAGE_KEY = "minmax-aniipedia:team-builder:v1";
   const LOADOUTS_STORAGE_KEY = "minmax-aniipedia:team-loadouts:v1";
