@@ -5,7 +5,7 @@
   const ITEMLOG_URL =
     window.ANIIPEDIA_CONFIG?.itemDataUrl ||
     "./data/itemlog_data.json?v=20260725-catalog-v003";
-  const MECHANICS_URL = "./data/team_builder_mechanics.json?v=20260723-reviewed-v001";
+  const MECHANICS_URL = "./data/team_builder_mechanics.json?v=20260725-stat-formula-v003";
   const LEGACY_STORAGE_KEY = "minmax-aniipedia:team-builder:v1";
   const LOADOUTS_STORAGE_KEY = "minmax-aniipedia:team-loadouts:v1";
   const LOADOUT_FILE_FORMAT = "aniipedia-team-loadout";
@@ -27,10 +27,11 @@
   const MAX_POTENTIAL_PER_STAT = 20;
   const MAX_RUNE_POTENTIAL_BONUS = 6;
   const MAX_CARRIED_ITEM_LEVEL = 20;
-  const POTENTIAL_MILESTONE_SIZE = 5;
+  const POTENTIAL_MILESTONE_SIZE = 4;
   const POTENTIAL_MILESTONE_BONUS = 0.06;
+  const INDIVIDUAL_POINT_COEFFICIENT = 0.01961;
   const BUFF_PATTERN = /\b(increas|boost|amplif|bonus|restore|shield|resist|siphon|damage dealt|critical|break efficiency|invincible)/i;
-  const STAT_ORDER = ["HP", "Attack", "Magic Attack", "Break", "Defense", "Magic Defense", "EP Regen"];
+  const STAT_ORDER = ["HP", "Attack", "Break", "Defense", "Magic Defense", "EP Regen"];
   const STAT_ALIASES = Object.freeze({
     HP: "HP",
     ATK: "Attack",
@@ -48,12 +49,12 @@
   });
   const LEVEL_STAT_CURVES = Object.freeze({
     HP: Object.freeze({ offset: 20, divisor: 120, scale: 20.4 }),
-    Attack: Object.freeze({ offset: 0, divisor: 90, scale: 0.51 }),
-    "Magic Attack": Object.freeze({ offset: 0, divisor: 90, scale: 0.51 }),
-    Break: Object.freeze({ offset: 0, divisor: 80, scale: 0.51 }),
-    Defense: Object.freeze({ offset: 0, divisor: 120, scale: 1.02 }),
-    "Magic Defense": Object.freeze({ offset: 0, divisor: 120, scale: 1.02 }),
-    "EP Regen": Object.freeze({ offset: 0, divisor: 50, scale: 0.51 }),
+    Attack: Object.freeze({ offset: 0, divisor: 120, scale: 1.02 }),
+    "Magic Attack": Object.freeze({ offset: 0, divisor: 120, scale: 1.02 }),
+    Break: Object.freeze({ offset: 0, divisor: 50, scale: 0.51 }),
+    Defense: Object.freeze({ offset: 0, divisor: 80, scale: 0.51 }),
+    "Magic Defense": Object.freeze({ offset: 0, divisor: 80, scale: 0.51 }),
+    "EP Regen": Object.freeze({ offset: 0, divisor: 90, scale: 0.51 }),
   });
   const POTENTIAL_STATS = Object.freeze([
     Object.freeze({ key: "HP", label: "HP" }),
@@ -71,7 +72,12 @@
       label: "Clingy",
       effects: Object.freeze([
         Object.freeze({ label: "Attack", value: 0.02 }),
-        Object.freeze({ label: "Break", value: 0.05 }),
+        Object.freeze({
+          label: "Break",
+          value: 0.05,
+          cardStat: false,
+          advancedLabel: "Break bonus",
+        }),
       ]),
     }),
     Object.freeze({
@@ -149,6 +155,7 @@
       ultimateSkill: "",
       personalities: [],
       potentials: Object.fromEntries(POTENTIAL_STATS.map((stat) => [stat.key, 0])),
+      formCollectionLevel: 0,
       carriedItemId: "",
       carriedItemLevel: MAX_CARRIED_ITEM_LEVEL,
       runes: {},
@@ -197,6 +204,7 @@
       ultimateSkill: String(value?.ultimateSkill || ""),
       personalities,
       potentials,
+      formCollectionLevel: Math.max(0, Math.round(Number(value?.formCollectionLevel) || 0)),
       carriedItemId: String(value?.carriedItemId || ""),
       carriedItemLevel: Math.min(
         MAX_CARRIED_ITEM_LEVEL,
@@ -421,6 +429,7 @@
         ultimateSkill: member.ultimateSkill,
         personalities: member.personalities,
         potentials: member.potentials,
+        formCollectionLevel: member.formCollectionLevel,
         carriedItemId: member.carriedItemId,
         carriedItemLevel: member.carriedItemLevel,
         runes: Object.entries(member.runes || {}).map(([position, selection]) => ({
@@ -720,6 +729,37 @@
     return mechanics?.entries?.[`${formId}|${section}|${name}`] || null;
   }
 
+  function statProjectionFor(entry) {
+    const formId = String(entry?.form_id || entry?.id || "").replace(/^aniimo:/, "");
+    return mechanics?.stat_projection?.forms?.[formId] || null;
+  }
+
+  function formCollectionDefinition(entry) {
+    const familyId = String(statProjectionFor(entry)?.collection_family_id || "");
+    return mechanics?.stat_projection?.collection_families?.[familyId] || null;
+  }
+
+  function maximumFormCollectionLevel(entry) {
+    return Math.max(0, Number(formCollectionDefinition(entry)?.max_level) || 0);
+  }
+
+  function formCollectionBonus(member, entry) {
+    const definition = formCollectionDefinition(entry);
+    const level = Math.min(
+      maximumFormCollectionLevel(entry),
+      Math.max(0, Math.round(Number(member?.formCollectionLevel) || 0)),
+    );
+    const bonus = definition?.bonuses_by_level?.[String(level)] || null;
+    return {
+      stat: String(bonus?.stat || ""),
+      percent: Number(bonus?.percent || 0),
+    };
+  }
+
+  function compactStatLabel(label) {
+    return POTENTIAL_STATS.find((stat) => stat.key === label)?.label || String(label || "");
+  }
+
   function personalityFor(id) {
     return PERSONALITY_OPTIONS.find((option) => option.id === String(id || "")) || null;
   }
@@ -754,6 +794,7 @@
     member.personalities = [];
     member.level = MAX_ANIIMO_LEVEL;
     member.stage = 7;
+    member.formCollectionLevel = 0;
     member.carriedItemId = "";
     member.carriedItemLevel = MAX_CARRIED_ITEM_LEVEL;
     member.runes = {};
@@ -780,6 +821,10 @@
     }
     member.personalities = normalizeMember({ personalities: member.personalities }).personalities;
     member.stage = Math.min(member.stage, maxStageForLevel(member.level));
+    member.formCollectionLevel = Math.min(
+      maximumFormCollectionLevel(entry),
+      Math.max(0, Math.round(Number(member.formCollectionLevel) || 0)),
+    );
     const item = carriedItemFor(member);
     if (!item) {
       member.carriedItemId = "";
@@ -1327,6 +1372,7 @@
     );
     section.append(heading);
 
+    const entry = aniimoFor(member);
     const progression = progressionForStage(member.stage);
     const carried = carriedItemFor(member);
     const potentialBonuses = potentialBonusBreakdown(member, progression.bonuses, carried);
@@ -1394,6 +1440,47 @@
       ),
     );
     section.append(automatic);
+
+    const collectionDefinition = formCollectionDefinition(entry);
+    const collectionMaximum = maximumFormCollectionLevel(entry);
+    if (collectionMaximum) {
+      const collectionBonus = formCollectionBonus(member, entry);
+      const collectionOptions = Array.from({ length: collectionMaximum + 1 }, (_, level) => ({
+        value: String(level),
+        label: level
+          ? `${level} collected alternate ${level === 1 ? "form" : "forms"}`
+          : "No alternate forms collected",
+      }));
+      const collectionControl = selectControl(
+        "Form collection",
+        collectionOptions,
+        String(Math.min(collectionMaximum, member.formCollectionLevel || 0)),
+        (value) => {
+          member.formCollectionLevel = Number(value);
+          persist();
+          render();
+        },
+        "team-form-collection-field",
+      );
+      const caption = collectionControl.querySelector(".team-field-label");
+      caption?.append(el(
+        "span",
+        "team-potential-result",
+        collectionBonus.stat
+          ? `${compactStatLabel(collectionBonus.stat)} +${formatValue(collectionBonus.percent, true)}`
+          : "No bonus",
+      ));
+      section.append(collectionControl);
+    }
+    if (collectionDefinition?.higher_level_unverified) {
+      section.append(el(
+        "p",
+        "team-derived-potential-note",
+        collectionMaximum
+          ? "A higher form-collection level exists, but its bonus is not verified."
+          : "This family has alternate forms, but its form-collection bonus is not verified.",
+      ));
+    }
 
     const personalityHeading = el("div", "team-subsection-heading");
     personalityHeading.append(
@@ -1591,9 +1678,10 @@
   function progressionForStage(stageNumber) {
     const stages = progressionStages();
     const eligible = stages.filter((stage) => Number(stage.stage) <= stageNumber);
-    const training = eligible.slice().reverse().find((stage) => Array.isArray(stage.training_steps) && stage.training_steps.length);
     return {
-      trainingSteps: training?.training_steps || [],
+      trainingSteps: eligible.flatMap((stage) => (
+        Array.isArray(stage.training_steps) ? stage.training_steps : []
+      )),
       bonuses: eligible.map((stage) => stage.stage_bonus).filter(Boolean),
     };
   }
@@ -1630,13 +1718,22 @@
     target.advanced[key] = (target.advanced[key] || 0) + number;
   }
 
-  function projectLevelStat(label, listedValue, level) {
+  function projectLevelStat(label, listedValue, level, effectivePotential = 0) {
     const curve = LEVEL_STAT_CURVES[label];
     const rating = Number(listedValue);
     const aniimoLevel = Number(level);
     if (!curve || !Number.isFinite(rating) || !Number.isFinite(aniimoLevel)) return rating || 0;
     const levelTerm = (4 * aniimoLevel) + 35;
-    return Math.floor(((rating + curve.offset) / curve.divisor) * levelTerm * curve.scale);
+    const coefficient = Number(
+      mechanics?.stat_projection?.individual_point_coefficient
+      ?? INDIVIDUAL_POINT_COEFFICIENT,
+    );
+    const individualMultiplier = 1 + (Number(effectivePotential) || 0) * coefficient;
+    return Math.floor(
+      ((rating + curve.offset) * individualMultiplier / curve.divisor)
+      * levelTerm
+      * curve.scale,
+    );
   }
 
   function addLevelBasedCarriedEffects(result, member, carried) {
@@ -1647,11 +1744,31 @@
     });
   }
 
-  function stagePotentialBonus(bonuses) {
-    return bonuses.reduce((maximum, bonus) => {
-      const match = String(bonus).match(/^Six Potentials\s*\+([0-9.]+)$/i);
-      return match ? Math.max(maximum, Number(match[1]) || 0) : maximum;
-    }, 0);
+  function stagePotentialBonuses(bonuses) {
+    const totals = Object.fromEntries(POTENTIAL_STATS.map((stat) => [stat.key, 0]));
+    const groups = [
+      { pattern: /^ATK\/BREAK\/HP\s*\+([0-9.]+)$/i, stats: ["Attack", "Break", "HP"] },
+      { pattern: /^REGEN\/P\.?DEF\/M\.?DEF\s*\+([0-9.]+)$/i, stats: ["EP Regen", "Defense", "Magic Defense"] },
+    ];
+    bonuses.forEach((bonus) => {
+      const text = String(bonus);
+      const allMatch = text.match(/^Six Potentials\s*\+([0-9.]+)$/i);
+      if (allMatch) {
+        POTENTIAL_STATS.forEach((stat) => {
+          totals[stat.key] += Number(allMatch[1]) || 0;
+        });
+        return;
+      }
+      for (const group of groups) {
+        const match = text.match(group.pattern);
+        if (!match) continue;
+        group.stats.forEach((stat) => {
+          totals[stat] += Number(match[1]) || 0;
+        });
+        break;
+      }
+    });
+    return totals;
   }
 
   function runePotentialBonus(member) {
@@ -1695,21 +1812,28 @@
   }
 
   function potentialBonusBreakdown(member, bonuses, carried) {
-    const starUp = stagePotentialBonus(bonuses);
+    const starUpStats = stagePotentialBonuses(bonuses);
     const runes = runePotentialBonus(member);
     const carriedStats = carriedPotentialBonuses(member, carried);
+    const starUpValues = [...new Set(Object.values(starUpStats))];
     return {
-      starUp,
+      starUp: starUpValues.length === 1 ? starUpValues[0] : 0,
+      starUpStats,
       runes,
-      all: starUp + runes,
+      all: starUpValues.length === 1 ? starUpValues[0] + runes : runes,
       carriedStats,
     };
   }
 
   function effectivePotentialValue(member, statKey, potentialBonuses) {
-    return Number(member.potentials?.[statKey] || 0)
-      + Number(potentialBonuses.all || 0)
+    const total = Number(member.potentials?.[statKey] || 0)
+      + Number(potentialBonuses.starUpStats?.[statKey] || 0)
+      + Number(potentialBonuses.runes || 0)
       + Number(potentialBonuses.carriedStats?.[statKey] || 0);
+    const maximum = Number(
+      mechanics?.stat_projection?.maximum_effective_potential || 32,
+    );
+    return Math.min(maximum, Math.max(0, total));
   }
 
   function applyStarUpBonuses(result, bonuses) {
@@ -1722,6 +1846,7 @@
       for (const group of groups) {
         const match = String(bonus).match(group.pattern);
         if (!match) continue;
+        if (!match[2]) break;
         const isPercent = Boolean(match[2]);
         const value = Number(match[1]) / (isPercent ? 100 : 1);
         group.stats.forEach((stat) => addModifier(result, stat, value, isPercent, "Star-Up bonus"));
@@ -1731,11 +1856,18 @@
   }
 
   function applyPotentialBonuses(result, member, carried) {
-    result.potentialBonuses = potentialBonusBreakdown(member, result.bonuses, carried);
     POTENTIAL_STATS.forEach((stat) => {
       const effective = effectivePotentialValue(member, stat.key, result.potentialBonuses);
       result.effectivePotentials[stat.key] = effective;
-      const percent = Math.floor(effective / POTENTIAL_MILESTONE_SIZE) * POTENTIAL_MILESTONE_BONUS;
+      const stepSize = Number(
+        mechanics?.stat_projection?.potential_step_size
+        ?? POTENTIAL_MILESTONE_SIZE,
+      );
+      const stepPercent = Number(
+        mechanics?.stat_projection?.potential_step_percent
+        ?? POTENTIAL_MILESTONE_BONUS,
+      );
+      const percent = Math.floor(effective / stepSize) * stepPercent;
       if (percent) addModifier(result, stat.key, percent, true, "Potential");
     });
   }
@@ -1744,9 +1876,21 @@
     (member.personalities || []).forEach((id) => {
       const option = PERSONALITY_OPTIONS.find((candidate) => candidate.id === id);
       option?.effects.forEach((effect) => {
+        if (effect.cardStat === false) {
+          const key = String(effect.advancedLabel || effect.label || "Modifier");
+          result.advanced[key] = (result.advanced[key] || 0) + Number(effect.value || 0);
+          return;
+        }
         addModifier(result, effect.label, effect.value, true, `Personality: ${option.label}`);
       });
     });
+  }
+
+  function applyFormCollectionBonus(result, member, entry) {
+    const bonus = formCollectionBonus(member, entry);
+    if (bonus.stat && bonus.percent) {
+      addModifier(result, bonus.stat, bonus.percent, true, "Form collection");
+    }
   }
 
   function memberStats(member, entry) {
@@ -1760,6 +1904,7 @@
       effectivePotentials: {},
       potentialBonuses: {
         starUp: 0,
+        starUpStats: Object.fromEntries(POTENTIAL_STATS.map((stat) => [stat.key, 0])),
         runes: 0,
         all: 0,
         carriedStats: {},
@@ -1767,18 +1912,32 @@
       sources: [],
       bonuses: [],
     };
+    const progression = progressionForStage(member.stage);
+    const carried = carriedItemFor(member);
+    result.bonuses = progression.bonuses;
+    result.potentialBonuses = potentialBonusBreakdown(member, result.bonuses, carried);
+    const projectedSpecies = statProjectionFor(entry)?.species || {};
     (entry?.stats || []).forEach((stat) => {
       result.listed[stat.label] = Number(stat.value || 0);
-      result.base[stat.label] = projectLevelStat(stat.label, stat.value, member.level);
+      const potentialKey = stat.label === "Magic Attack" ? "Attack" : stat.label;
+      const effectivePotential = effectivePotentialValue(
+        member,
+        potentialKey,
+        result.potentialBonuses,
+      );
+      const speciesValue = Number(projectedSpecies[stat.label] ?? stat.value ?? 0);
+      result.base[stat.label] = projectLevelStat(
+        stat.label,
+        speciesValue,
+        member.level,
+        effectivePotential,
+      );
     });
-    const progression = progressionForStage(member.stage);
     progression.trainingSteps.forEach((step) => {
       (step.stat_gains || []).forEach((gain) => addFlat(result, gain.label, gain.value, `${translate("Training level")} ${step.level}`));
     });
-    result.bonuses = progression.bonuses;
     applyStarUpBonuses(result, result.bonuses);
 
-    const carried = carriedItemFor(member);
     (carried?.carried_effects?.base_attributes || []).forEach((effect) => {
       const match = String(effect).match(/^(.+?)\s*([+-]\d+(?:\.\d+)?)(%)?$/);
       if (!match) return;
@@ -1801,6 +1960,7 @@
       });
     });
     applyPotentialBonuses(result, member, carried);
+    applyFormCollectionBonus(result, member, entry);
     applyPersonalityBonuses(result, member);
     return result;
   }
@@ -1821,7 +1981,7 @@
       const added = Number(stats.flat[label] || 0);
       const percent = Number(stats.percent[label] || 0);
       const post = Number(stats.postFlat[label] || 0);
-      const total = (base + added) * (1 + percent) + post;
+      const total = Math.floor((base + added) * (1 + percent) + post);
       const breakdown = [
         formatValue(base, false),
         added ? `+ ${formatValue(added, false)}` : "",
@@ -1844,9 +2004,22 @@
       });
       section.append(modifiers);
     }
+    if (Object.keys(stats.advanced).length) {
+      const modifiers = el("div", "team-modifier-list");
+      Object.entries(stats.advanced).forEach(([label, value]) => {
+        modifiers.append(el(
+          "span",
+          "team-pill",
+          `${translate(label)} +${formatValue(value, true)} · combat only`,
+        ));
+      });
+      section.append(modifiers);
+    }
     const displayedBonuses = stats.bonuses.filter((bonus) => {
-      const match = String(bonus).match(/^Six Potentials\s*\+([0-9.]+)$/i);
-      return !match || Number(match[1]) === stats.potentialBonuses.starUp;
+      const text = String(bonus);
+      if (/^Six Potentials\s*\+/i.test(text)) return false;
+      if (/^(?:ATK\/BREAK\/HP|REGEN\/P\.?DEF\/M\.?DEF)\s*\+[0-9.]+$/i.test(text)) return false;
+      return true;
     });
     if (displayedBonuses.length) {
       const bonuses = el("div", "team-stage-bonuses");
@@ -1867,7 +2040,7 @@
     section.append(el(
       "p",
       "team-data-note",
-      translate("Projected totals use the verified layer order: level-scaled base and flat training or rune values, additive Star-Up, Potential, and Personality percentages, then per-level carried-item additions. Conditional combat effects and unsupported modifiers remain separate."),
+      translate("Projected totals use the verified layer order: the configured Aniimo stat formula and effective Potential, cumulative Star-Up training, additive Potential, personality, form-collection, item, and rune modifiers, then final card flooring. Combat-only effects remain separate from the six displayed card stats."),
     ));
     return section;
   }
