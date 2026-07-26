@@ -597,6 +597,12 @@
       if (activeLocale === "ja") return `このアイテムを ${itemUse[1]} 個使用${suffix}`;
       if (activeLocale === "ko") return `이 아이템 ${itemUse[1]}개 사용${suffix}`;
     }
+    const aniimoFormsCount = text.match(/^([\d,]+) Aniimo forms$/);
+    if (aniimoFormsCount) {
+      if (activeLocale === "zh-CN") return `${aniimoFormsCount[1]} \u4e2a\u4f0a\u83ab\u5f62\u6001`;
+      if (activeLocale === "ja") return `${aniimoFormsCount[1]}\u4f53\u306e\u30a2\u30cb\u30e2\u5f62\u614b`;
+      if (activeLocale === "ko") return `${aniimoFormsCount[1]}\uac1c \uc560\ub2c8\ubaa8 \ud615\ud0dc`;
+    }
     const aniimoCount = text.match(/^([\d,]+) Aniimo$/);
     if (aniimoCount) {
       if (activeLocale === "zh-CN") return `${aniimoCount[1]} 个伊莫`;
@@ -683,7 +689,14 @@
         ja: "体のアニモ",
         ko: "개 애니모",
       };
-      return translatedCounts.replace(/(\d+) Aniimo/g, `$1${aniimoCountTerms[activeLocale] || " Aniimo"}`);
+      const aniimoFormsCountTerms = {
+        "zh-CN": "\u4e2a\u4f0a\u83ab\u5f62\u6001",
+        ja: "\u4f53\u306e\u30a2\u30cb\u30e2\u5f62\u614b",
+        ko: "\uac1c \uc560\ub2c8\ubaa8 \ud615\ud0dc",
+      };
+      return translatedCounts
+        .replace(/(\d+) Aniimo forms/g, `$1${aniimoFormsCountTerms[activeLocale] || " Aniimo forms"}`)
+        .replace(/(\d+) Aniimo/g, `$1${aniimoCountTerms[activeLocale] || " Aniimo"}`);
     }
     const formSuffix = text.match(/^(.*?)(\s[-–—•]\s)([^-–—•]+)$/);
     if (formSuffix) {

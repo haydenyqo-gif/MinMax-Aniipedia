@@ -132,12 +132,13 @@ function normalizeTeamSelection(value) {
         ? member.activeSkills.slice(0, 2).map((skill) => limitedString(skill, 256))
         : ["", ""],
       switchSkill: limitedString(member?.switchSkill, 256),
+      ultimateSkill: limitedString(member?.ultimateSkill, 256),
       personalities: Array.isArray(member?.personalities)
         ? member.personalities.slice(0, 4).map((trait) => limitedString(trait, 64))
         : [],
       potentials,
-      awakeningBonus: clampNumber(member?.awakeningBonus, 0, 24, 0),
       carriedItemId: limitedString(member?.carriedItemId),
+      carriedItemLevel: clampNumber(member?.carriedItemLevel, 0, 20, 20),
       runes,
     };
   });

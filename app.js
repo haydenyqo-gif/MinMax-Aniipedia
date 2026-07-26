@@ -4,7 +4,7 @@ const ITEMLOG_DATA_URL =
   window.ANIIPEDIA_CONFIG?.itemDataUrl ||
   "./data/itemlog_data.json?v=20260725-catalog-v003";
 const ANIILOG_DATA_URL = "./data/aniilog_data.json?v=20260721-skill-behavior-v001";
-const APP_VERSION = "v0.5.24";
+const APP_VERSION = "v0.5.26";
 const GITHUB_COMMITS_URL = "https://api.github.com/repos/donneeee/MinMax-Aniipedia/commits?sha=main&per_page=30";
 const CHANGELOG_INTERNAL_MARKER_RE = /\[(?:skip changelog|internal)\]/i;
 const CHANGELOG_PUBLIC_ENTRY_LIMIT = 12;
@@ -9040,7 +9040,7 @@ function updateMapMeta() {
   const parts = [
     `${Math.max(0, (counts.spawns || 0) - hiddenCounts.spawns)} markers`,
     `${headerCatalogCount("items", Math.max(0, (counts.collectable_items || 0) - hiddenCounts.items))} items`,
-    `${headerCatalogCount("aniimo", counts.aniimo || 0)} Aniimo`,
+    `${headerCatalogCount("aniimo", counts.aniimo || 0)} Aniimo forms`,
     `${headerCatalogCount("eggs", counts.eggs ?? counts.elite_eggs ?? 0)} eggs`,
     `${counts.teleports || 0} teleports`,
     `${headerCatalogCount("lumens", counts.ambers || 0)} Lumens`,

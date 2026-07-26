@@ -25,7 +25,8 @@
   const MIN_ANIIMO_LEVEL = 1;
   const MAX_ANIIMO_LEVEL = 60;
   const MAX_POTENTIAL_PER_STAT = 24;
-  const MAX_AWAKENING_BONUS = 24;
+  const MAX_RUNE_POTENTIAL_BONUS = 6;
+  const MAX_CARRIED_ITEM_LEVEL = 20;
   const POTENTIAL_MILESTONE_SIZE = 5;
   const POTENTIAL_MILESTONE_BONUS = 0.06;
   const BUFF_PATTERN = /\b(increas|boost|amplif|bonus|restore|shield|resist|siphon|damage dealt|critical|break efficiency|invincible)/i;
@@ -148,8 +149,8 @@
       ultimateSkill: "",
       personalities: [],
       potentials: Object.fromEntries(POTENTIAL_STATS.map((stat) => [stat.key, 0])),
-      awakeningBonus: 0,
       carriedItemId: "",
+      carriedItemLevel: MAX_CARRIED_ITEM_LEVEL,
       runes: {},
     };
   }
@@ -165,6 +166,7 @@
 
   function normalizeMember(value) {
     const base = defaultMember();
+    const requestedCarriedItemLevel = Number(value?.carriedItemLevel);
     const activeSkills = Array.isArray(value?.activeSkills)
       ? value.activeSkills.slice(0, MAX_ACTIVE_SKILLS).map((skill) => String(skill || ""))
       : base.activeSkills;
@@ -195,11 +197,16 @@
       ultimateSkill: String(value?.ultimateSkill || ""),
       personalities,
       potentials,
-      awakeningBonus: Math.min(
-        MAX_AWAKENING_BONUS,
-        Math.max(0, Math.round(Number(value?.awakeningBonus) || 0)),
-      ),
       carriedItemId: String(value?.carriedItemId || ""),
+      carriedItemLevel: Math.min(
+        MAX_CARRIED_ITEM_LEVEL,
+        Math.max(
+          0,
+          Number.isFinite(requestedCarriedItemLevel)
+            ? Math.round(requestedCarriedItemLevel)
+            : MAX_CARRIED_ITEM_LEVEL,
+        ),
+      ),
       runes: value?.runes && typeof value.runes === "object" ? value.runes : {},
     };
   }
@@ -414,8 +421,8 @@
         ultimateSkill: member.ultimateSkill,
         personalities: member.personalities,
         potentials: member.potentials,
-        awakeningBonus: member.awakeningBonus,
         carriedItemId: member.carriedItemId,
+        carriedItemLevel: member.carriedItemLevel,
         runes: Object.entries(member.runes || {}).map(([position, selection]) => ({
           position,
           itemId: String(selection?.itemId || ""),
@@ -748,6 +755,7 @@
     member.level = MAX_ANIIMO_LEVEL;
     member.stage = 7;
     member.carriedItemId = "";
+    member.carriedItemLevel = MAX_CARRIED_ITEM_LEVEL;
     member.runes = {};
   }
 
@@ -775,8 +783,50 @@
     const item = carriedItemFor(member);
     if (!item) {
       member.carriedItemId = "";
+      member.carriedItemLevel = MAX_CARRIED_ITEM_LEVEL;
       member.runes = {};
+      return;
     }
+
+    member.carriedItemLevel = Math.min(
+      MAX_CARRIED_ITEM_LEVEL,
+      Math.max(0, Math.round(Number(member.carriedItemLevel) || 0)),
+    );
+    const slots = new Map(
+      (item.rune_socket_layout?.slots || [])
+        .filter((slot) => slot.available_at_this_rarity)
+        .map((slot) => [String(slot.position), slot]),
+    );
+    const normalizedRunes = {};
+    Object.entries(member.runes || {}).slice(0, slots.size).forEach(([position, selection]) => {
+      const slot = slots.get(String(position));
+      if (!slot) return;
+      const compatibleShapes = new Set((slot.options || []).map((option) => option.id));
+      const rune = runeItems().find((candidate) => (
+        candidate.id === String(selection?.itemId || "")
+        && compatibleShapes.has(candidate?.rune_details?.shape?.id)
+      ));
+      if (!rune) return;
+      const allowedRolls = new Set(
+        (rune.rune_details?.secondary_rolls || []).map((roll) => String(roll.attribute_id)),
+      );
+      const usedRolls = new Set();
+      const lineCount = Number(rune.rune_details?.secondary_lines || 0);
+      const rolls = Array.from({ length: lineCount }, (_, index) => {
+        const chosen = selection?.rolls?.[index];
+        const attributeId = String(chosen?.attributeId || "");
+        if (!allowedRolls.has(attributeId) || usedRolls.has(attributeId)) {
+          return { attributeId: "", mode: "perfect" };
+        }
+        usedRolls.add(attributeId);
+        return {
+          attributeId,
+          mode: chosen?.mode === "minimum" ? "minimum" : "perfect",
+        };
+      });
+      normalizedRunes[String(position)] = { itemId: rune.id, rolls };
+    });
+    member.runes = normalizedRunes;
   }
 
   async function ensureData() {
@@ -844,6 +894,14 @@
     return index === 0 ? translate("Main Aniimo") : `${translate("Core skill ally")} ${index}`;
   }
 
+  function starUpLevel(stageNumber) {
+    return Math.max(0, Math.min(6, Math.round(Number(stageNumber) || 1) - 1));
+  }
+
+  function starUpLabel(stageNumber) {
+    return `${translate("Star-Up")} +${starUpLevel(stageNumber)}`;
+  }
+
   function renderSidebarSlot(member, index) {
     const entry = aniimoFor(member);
     const card = el("article", "team-sidebar-slot");
@@ -868,7 +926,7 @@
     const stage = el(
       "span",
       "team-sidebar-slot-stage",
-      entry ? `${translate("Level")} ${member.level} · ${translate("Tier")} ${member.stage}` : "",
+      entry ? `${translate("Level")} ${member.level} · ${starUpLabel(member.stage)}` : "",
     );
     header.append(role, stage);
 
@@ -1248,10 +1306,10 @@
       .map((stage) => ({
         value: String(stage.stage),
         label: stage.level_gate
-          ? `${translate("Tier")} ${stage.stage} · ${translate("Level")} ${stage.level_gate}`
-          : `${translate("Tier")} ${stage.stage}`,
+          ? `${starUpLabel(stage.stage)} · ${translate("Level")} ${stage.level_gate}`
+          : starUpLabel(stage.stage),
       }));
-    controls.append(selectControl(translate("Resonance Training"), stageOptions, String(member.stage), (value) => {
+    controls.append(selectControl(translate("Resonance Star-Up"), stageOptions, String(member.stage), (value) => {
       member.stage = Number(value);
       persist();
       render();
@@ -1285,18 +1343,50 @@
       ));
     });
     section.append(potentialGrid);
-    section.append(numberControl(
-      "Awakening bonus to all Potentials",
-      member.awakeningBonus || 0,
-      0,
-      MAX_AWAKENING_BONUS,
-      (value) => {
-        member.awakeningBonus = value;
-        persist();
-        render();
-      },
-      "team-awakening-field",
-    ));
+
+    const progression = progressionForStage(member.stage);
+    const carried = carriedItemFor(member);
+    const potentialBonuses = potentialBonusBreakdown(member, progression.bonuses, carried);
+    const automatic = el("div", "team-derived-potential");
+    const automaticHeading = el("div", "team-derived-potential-heading");
+    automaticHeading.append(
+      el("strong", "", "Automatic Potential bonuses"),
+      el("span", "team-derived-potential-total", `+${formatValue(potentialBonuses.all, false)} to all`),
+    );
+    automatic.append(automaticHeading);
+    const automaticSources = el("div", "team-derived-potential-sources");
+    automaticSources.append(
+      el(
+        "span",
+        "team-pill team-pill--stat",
+        `${starUpLabel(member.stage)}: +${formatValue(potentialBonuses.starUp, false)} to all`,
+      ),
+      el(
+        "span",
+        "team-pill team-pill--stat",
+        `Rune rolls: +${formatValue(potentialBonuses.runes, false)} / ${MAX_RUNE_POTENTIAL_BONUS} to all`,
+      ),
+    );
+    const carriedEntries = Object.entries(potentialBonuses.carriedStats);
+    if (carried && carriedEntries.length) {
+      carriedEntries.forEach(([stat, value]) => {
+        const label = POTENTIAL_STATS.find((candidate) => candidate.key === stat)?.label || stat;
+        automaticSources.append(el(
+          "span",
+          "team-pill",
+          `${translate(carried.name)} +${member.carriedItemLevel}: ${label} +${formatValue(value, false)}`,
+        ));
+      });
+    }
+    automatic.append(
+      automaticSources,
+      el(
+        "small",
+        "team-derived-potential-note",
+        "Star-Up and selected Six Aptitude Stats rune rolls are applied to every Potential. Unlocked carried-item bonuses apply only to the listed Potential.",
+      ),
+    );
+    section.append(automatic);
 
     const personalityHeading = el("div", "team-subsection-heading");
     personalityHeading.append(
@@ -1350,6 +1440,7 @@
     ];
     section.append(selectControl("Carried item", options, member.carriedItemId, (value) => {
       member.carriedItemId = value;
+      member.carriedItemLevel = MAX_CARRIED_ITEM_LEVEL;
       member.runes = {};
       persist();
       render();
@@ -1357,10 +1448,35 @@
     const item = carriedItemFor(member);
     if (!item) return section;
 
+    const carriedLevelOptions = Array.from({ length: MAX_CARRIED_ITEM_LEVEL + 1 }, (_, level) => ({
+      value: String(level),
+      label: `+${level}`,
+    }));
+    section.append(selectControl(
+      "Carried item enhancement",
+      carriedLevelOptions,
+      String(member.carriedItemLevel),
+      (value) => {
+        member.carriedItemLevel = Number(value);
+        persist();
+        render();
+      },
+      "team-carried-level-field",
+    ));
+
     const effects = el("div", "team-equipment-effects");
     (item.carried_effects?.base_attributes || []).forEach((effect) => effects.append(el("span", "team-pill team-pill--stat", effect)));
     (item.carried_effects?.core_effects || []).forEach((effect) => effects.append(el("span", "team-pill", `${translate("Core")}: ${translate(effect)}`)));
-    (item.carried_effects?.advanced_effects || []).forEach((effect) => effects.append(el("span", "team-pill", `${translate("Advanced")}: ${translate(effect)}`)));
+    (item.carried_effects?.advanced_effects || []).forEach((group) => {
+      const unlocked = Number(member.carriedItemLevel || 0) >= Number(group?.unlock_level || 0);
+      (group?.effects || []).forEach((effect) => {
+        effects.append(el(
+          "span",
+          `team-pill${unlocked ? "" : " is-locked"}`,
+          `${translate("Advanced")} +${group.unlock_level}: ${translate(effect)}${unlocked ? "" : " (locked)"}`,
+        ));
+      });
+    });
     if (effects.childElementCount) section.append(effects);
 
     const sockets = el("div", "team-rune-sockets");
@@ -1496,10 +1612,6 @@
   function addModifier(target, label, value, isPercent, source) {
     const number = Number(value);
     if (!Number.isFinite(number)) return;
-    if (label === "Six Aptitude Stats") {
-      target.advanced[label] = (target.advanced[label] || 0) + number;
-      return;
-    }
     if (!isPercent && addFlat(target, label, value, source)) return;
     const stat = STAT_ALIASES[label];
     if (isPercent && stat) {
@@ -1528,33 +1640,89 @@
     });
   }
 
-  function applyTierBonuses(result, bonuses) {
+  function stagePotentialBonus(bonuses) {
+    return bonuses.reduce((maximum, bonus) => {
+      const match = String(bonus).match(/^Six Potentials\s*\+([0-9.]+)$/i);
+      return match ? Math.max(maximum, Number(match[1]) || 0) : maximum;
+    }, 0);
+  }
+
+  function runePotentialBonus(member) {
+    const total = Object.values(member.runes || {}).reduce((sum, selection) => {
+      const rune = runeItems().find((entry) => entry.id === selection?.itemId);
+      if (!rune) return sum;
+      return sum + (selection.rolls || []).reduce((rollSum, chosen) => {
+        const roll = (rune.rune_details?.secondary_rolls || [])
+          .find((candidate) => String(candidate.attribute_id) === String(chosen.attributeId));
+        if (roll?.label !== "Six Aptitude Stats") return rollSum;
+        const value = chosen.mode === "minimum" ? roll.minimum : roll.maximum;
+        return rollSum + (Number(value) || 0);
+      }, 0);
+    }, 0);
+    return Math.min(MAX_RUNE_POTENTIAL_BONUS, total);
+  }
+
+  function carriedPotentialBonuses(member, carried) {
+    const bonuses = {};
+    const potentialKeys = new Set(POTENTIAL_STATS.map((stat) => stat.key));
+    const add = (label, value) => {
+      const stat = STAT_ALIASES[label];
+      const amount = Number(value);
+      if (!potentialKeys.has(stat) || !Number.isFinite(amount)) return;
+      bonuses[stat] = (bonuses[stat] || 0) + amount;
+    };
+    (carried?.carried_effects?.advanced_effects || []).forEach((group) => {
+      if (Number(group?.unlock_level || 0) > Number(member.carriedItemLevel || 0)) return;
+      (group?.effects || []).forEach((effect) => {
+        const text = String(effect || "").trim();
+        const exact = text.match(/^(ATK|BREAK|HP|REGEN)\s*\+([0-9.]+)$/i);
+        if (exact) {
+          add(exact[1].toUpperCase(), exact[2]);
+          return;
+        }
+        const explicit = /(ATK|BREAK|HP|REGEN|M\.?DEF|P\.?DEF)\s+Acquired Potential\s*\+([0-9.]+)/gi;
+        for (const match of text.matchAll(explicit)) add(match[1].toUpperCase(), match[2]);
+      });
+    });
+    return bonuses;
+  }
+
+  function potentialBonusBreakdown(member, bonuses, carried) {
+    const starUp = stagePotentialBonus(bonuses);
+    const runes = runePotentialBonus(member);
+    const carriedStats = carriedPotentialBonuses(member, carried);
+    return {
+      starUp,
+      runes,
+      all: starUp + runes,
+      carriedStats,
+    };
+  }
+
+  function applyStarUpBonuses(result, bonuses) {
     const groups = [
       { pattern: /^ATK\/BREAK\/HP\s*\+([0-9.]+)(%)?$/i, stats: ["Attack", "Break", "HP"] },
       { pattern: /^REGEN\/P\.?DEF\/M\.?DEF\s*\+([0-9.]+)(%)?$/i, stats: ["EP Regen", "Defense", "Magic Defense"] },
     ];
     bonuses.forEach((bonus) => {
-      const potential = String(bonus).match(/^Six Potentials\s*\+([0-9.]+)$/i);
-      if (potential) {
-        addModifier(result, "Six Aptitude Stats", Number(potential[1]), false, "Tier bonus");
-        return;
-      }
+      if (/^Six Potentials\s*\+/i.test(String(bonus))) return;
       for (const group of groups) {
         const match = String(bonus).match(group.pattern);
         if (!match) continue;
         const isPercent = Boolean(match[2]);
         const value = Number(match[1]) / (isPercent ? 100 : 1);
-        group.stats.forEach((stat) => addModifier(result, stat, value, isPercent, "Tier bonus"));
+        group.stats.forEach((stat) => addModifier(result, stat, value, isPercent, "Star-Up bonus"));
         break;
       }
     });
   }
 
-  function applyPotentialBonuses(result, member) {
-    const globalBonus = Number(member.awakeningBonus || 0)
-      + Number(result.advanced["Six Aptitude Stats"] || 0);
+  function applyPotentialBonuses(result, member, carried) {
+    result.potentialBonuses = potentialBonusBreakdown(member, result.bonuses, carried);
     POTENTIAL_STATS.forEach((stat) => {
-      const effective = Number(member.potentials?.[stat.key] || 0) + globalBonus;
+      const effective = Number(member.potentials?.[stat.key] || 0)
+        + result.potentialBonuses.all
+        + Number(result.potentialBonuses.carriedStats[stat.key] || 0);
       result.effectivePotentials[stat.key] = effective;
       const percent = Math.floor(effective / POTENTIAL_MILESTONE_SIZE) * POTENTIAL_MILESTONE_BONUS;
       if (percent) addModifier(result, stat.key, percent, true, "Potential");
@@ -1579,6 +1747,12 @@
       percent: {},
       advanced: {},
       effectivePotentials: {},
+      potentialBonuses: {
+        starUp: 0,
+        runes: 0,
+        all: 0,
+        carriedStats: {},
+      },
       sources: [],
       bonuses: [],
     };
@@ -1591,7 +1765,7 @@
       (step.stat_gains || []).forEach((gain) => addFlat(result, gain.label, gain.value, `${translate("Training level")} ${step.level}`));
     });
     result.bonuses = progression.bonuses;
-    applyTierBonuses(result, result.bonuses);
+    applyStarUpBonuses(result, result.bonuses);
 
     const carried = carriedItemFor(member);
     (carried?.carried_effects?.base_attributes || []).forEach((effect) => {
@@ -1611,10 +1785,11 @@
           .find((candidate) => String(candidate.attribute_id) === String(chosen.attributeId));
         if (!roll) return;
         const value = chosen.mode === "minimum" ? roll.minimum : roll.maximum;
+        if (roll.label === "Six Aptitude Stats") return;
         addModifier(result, roll.label, value, roll.is_percent, `${translate(rune.name)} · ${translate("Secondary roll")}`);
       });
     });
-    applyPotentialBonuses(result, member);
+    applyPotentialBonuses(result, member, carried);
     applyPersonalityBonuses(result, member);
     return result;
   }
@@ -1624,7 +1799,7 @@
     const heading = el("div", "team-section-heading");
     heading.append(
       el("div", "", translate("Projected build stats")),
-      el("small", "", `${translate("Level")} ${member.level} · ${translate("Tier")} ${member.stage}`),
+      el("small", "", `${translate("Level")} ${member.level} · ${starUpLabel(member.stage)}`),
     );
     section.append(heading);
     const stats = memberStats(member, entry);
@@ -1658,10 +1833,14 @@
       });
       section.append(modifiers);
     }
-    if (stats.bonuses.length) {
+    const displayedBonuses = stats.bonuses.filter((bonus) => {
+      const match = String(bonus).match(/^Six Potentials\s*\+([0-9.]+)$/i);
+      return !match || Number(match[1]) === stats.potentialBonuses.starUp;
+    });
+    if (displayedBonuses.length) {
       const bonuses = el("div", "team-stage-bonuses");
-      bonuses.append(el("strong", "", "Tier bonuses"));
-      stats.bonuses.forEach((bonus) => bonuses.append(el("span", "team-pill", bonus)));
+      bonuses.append(el("strong", "", "Star-Up bonuses"));
+      displayedBonuses.forEach((bonus) => bonuses.append(el("span", "team-pill", bonus)));
       section.append(bonuses);
     }
     const potentials = el("div", "team-potential-summary");
@@ -1677,7 +1856,7 @@
     section.append(el(
       "p",
       "team-data-note",
-      translate("Projected totals use the verified layer order: level-scaled base and flat training or rune values, additive tier, Potential, and Personality percentages, then per-level carried-item additions. Conditional combat effects and unsupported modifiers remain separate."),
+      translate("Projected totals use the verified layer order: level-scaled base and flat training or rune values, additive Star-Up, Potential, and Personality percentages, then per-level carried-item additions. Conditional combat effects and unsupported modifiers remain separate."),
     ));
     return section;
   }
@@ -1743,7 +1922,16 @@
       }
       const carried = carriedItemFor(member);
       (carried?.carried_effects?.core_effects || []).forEach((description, effectIndex) => append("Carried item", carried.name, description, `Core effect ${effectIndex + 1}`));
-      (carried?.carried_effects?.advanced_effects || []).forEach((description, effectIndex) => append("Carried item", carried.name, description, `Advanced effect ${effectIndex + 1}`));
+      (carried?.carried_effects?.advanced_effects || [])
+        .filter((group) => Number(member.carriedItemLevel || 0) >= Number(group?.unlock_level || 0))
+        .forEach((group) => {
+          (group?.effects || []).forEach((description, effectIndex) => append(
+            "Carried item",
+            carried.name,
+            description,
+            `Advanced +${group.unlock_level} effect ${effectIndex + 1}`,
+          ));
+        });
     });
     return effects;
   }

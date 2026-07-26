@@ -548,8 +548,37 @@ button[aria-pressed="true"] {
   width: 100%;
 }
 
-.team-awakening-field {
-  width: min(100%, 360px);
+.team-derived-potential {
+  display: grid;
+  gap: 9px;
+  border: 1px solid rgba(var(--accent-rgb), 0.55);
+  border-radius: 8px;
+  background: rgba(var(--accent-rgb), 0.08);
+  padding: 11px 12px;
+}
+
+.team-derived-potential-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.team-derived-potential-total {
+  color: var(--accent-2);
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.team-derived-potential-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.team-derived-potential-note {
+  color: var(--muted);
+  line-height: 1.4;
 }
 
 .team-subsection-heading {
@@ -777,6 +806,16 @@ button[aria-pressed="true"] {
   border-color: rgba(var(--accent-2-rgb), 0.56);
   background: rgba(var(--accent-2-rgb), 0.1);
   color: color-mix(in srgb, var(--accent-2) 34%, var(--text));
+}
+
+.team-pill.is-locked {
+  border-style: dashed;
+  opacity: 0.58;
+}
+
+.team-carried-level-field {
+  width: min(100%, 240px);
+  margin-top: 10px;
 }
 
 .team-equipment-effects,
