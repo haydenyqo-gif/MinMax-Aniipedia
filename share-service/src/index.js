@@ -110,7 +110,7 @@ function normalizeTeamSelection(value) {
   const members = value.members.slice(0, 4).map((member) => {
     const potentials = Object.fromEntries(potentialKeys.map((key) => [
       key,
-      clampNumber(member?.potentials?.[key], 0, 24, 0),
+      clampNumber(member?.potentials?.[key], 0, 20, 0),
     ]));
     const runes = Array.isArray(member?.runes)
       ? member.runes.slice(0, 6).map((rune) => ({

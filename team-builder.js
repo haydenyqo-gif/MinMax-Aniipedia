@@ -24,7 +24,7 @@
   const MAX_ACTIVE_SKILLS = 2;
   const MIN_ANIIMO_LEVEL = 1;
   const MAX_ANIIMO_LEVEL = 60;
-  const MAX_POTENTIAL_PER_STAT = 24;
+  const MAX_POTENTIAL_PER_STAT = 20;
   const MAX_RUNE_POTENTIAL_BONUS = 6;
   const MAX_CARRIED_ITEM_LEVEL = 20;
   const POTENTIAL_MILESTONE_SIZE = 5;
@@ -1323,13 +1323,16 @@
     const heading = el("div", "team-section-heading");
     heading.append(
       el("div", "", "Potential & personality"),
-      el("small", "", "Enter the values shown around the Aniimo stat card"),
+      el("small", "", "Enter base values from 0–20; totals include automatic bonuses"),
     );
     section.append(heading);
 
+    const progression = progressionForStage(member.stage);
+    const carried = carriedItemFor(member);
+    const potentialBonuses = potentialBonusBreakdown(member, progression.bonuses, carried);
     const potentialGrid = el("div", "team-potential-grid");
     POTENTIAL_STATS.forEach((stat) => {
-      potentialGrid.append(numberControl(
+      const control = numberControl(
         stat.label,
         member.potentials?.[stat.key] || 0,
         0,
@@ -1340,13 +1343,17 @@
           render();
         },
         "team-potential-field",
+      );
+      const caption = control.querySelector(".team-field-label");
+      caption?.append(el(
+        "span",
+        "team-potential-result",
+        `Total ${formatValue(effectivePotentialValue(member, stat.key, potentialBonuses), false)}`,
       ));
+      potentialGrid.append(control);
     });
     section.append(potentialGrid);
 
-    const progression = progressionForStage(member.stage);
-    const carried = carriedItemFor(member);
-    const potentialBonuses = potentialBonusBreakdown(member, progression.bonuses, carried);
     const automatic = el("div", "team-derived-potential");
     const automaticHeading = el("div", "team-derived-potential-heading");
     automaticHeading.append(
@@ -1699,6 +1706,12 @@
     };
   }
 
+  function effectivePotentialValue(member, statKey, potentialBonuses) {
+    return Number(member.potentials?.[statKey] || 0)
+      + Number(potentialBonuses.all || 0)
+      + Number(potentialBonuses.carriedStats?.[statKey] || 0);
+  }
+
   function applyStarUpBonuses(result, bonuses) {
     const groups = [
       { pattern: /^ATK\/BREAK\/HP\s*\+([0-9.]+)(%)?$/i, stats: ["Attack", "Break", "HP"] },
@@ -1720,9 +1733,7 @@
   function applyPotentialBonuses(result, member, carried) {
     result.potentialBonuses = potentialBonusBreakdown(member, result.bonuses, carried);
     POTENTIAL_STATS.forEach((stat) => {
-      const effective = Number(member.potentials?.[stat.key] || 0)
-        + result.potentialBonuses.all
-        + Number(result.potentialBonuses.carriedStats[stat.key] || 0);
+      const effective = effectivePotentialValue(member, stat.key, result.potentialBonuses);
       result.effectivePotentials[stat.key] = effective;
       const percent = Math.floor(effective / POTENTIAL_MILESTONE_SIZE) * POTENTIAL_MILESTONE_BONUS;
       if (percent) addModifier(result, stat.key, percent, true, "Potential");
