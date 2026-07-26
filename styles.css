@@ -894,6 +894,11 @@ button[aria-pressed="true"] {
   font-size: 10px;
 }
 
+.team-stat-card .team-stat-range {
+  color: var(--accent-2);
+  font-weight: 800;
+}
+
 .team-stat-card strong {
   font-size: 18px;
 }

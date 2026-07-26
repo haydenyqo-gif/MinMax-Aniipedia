@@ -5,7 +5,7 @@
   const ITEMLOG_URL =
     window.ANIIPEDIA_CONFIG?.itemDataUrl ||
     "./data/itemlog_data.json?v=20260725-catalog-v003";
-  const MECHANICS_URL = "./data/team_builder_mechanics.json?v=20260725-stat-formula-v003";
+  const MECHANICS_URL = "./data/team_builder_mechanics.json?v=20260726-stat-range-v004";
   const LEGACY_STORAGE_KEY = "minmax-aniipedia:team-builder:v1";
   const LOADOUTS_STORAGE_KEY = "minmax-aniipedia:team-loadouts:v1";
   const LOADOUT_FILE_FORMAT = "aniipedia-team-loadout";
@@ -1401,6 +1401,15 @@
     section.append(potentialGrid);
 
     const automatic = el("div", "team-derived-potential");
+    const maximumBasePotential = Number(
+      mechanics?.stat_projection?.maximum_base_potential || MAX_POTENTIAL_PER_STAT,
+    );
+    const maximumExtraPotential = Number(
+      mechanics?.stat_projection?.maximum_extra_potential || 10,
+    );
+    const maximumEffectivePotential = Number(
+      mechanics?.stat_projection?.maximum_effective_potential || 32,
+    );
     const automaticHeading = el("div", "team-derived-potential-heading");
     automaticHeading.append(
       el("strong", "", "Automatic Potential bonuses"),
@@ -1436,7 +1445,7 @@
       el(
         "small",
         "team-derived-potential-note",
-        "Star-Up and selected Six Aptitude Stats rune rolls are applied to every Potential. Unlocked carried-item bonuses apply only to the listed Potential.",
+        `Star-Up and selected Six Aptitude Stats rune rolls apply to every Potential; unlocked carried-item bonuses apply only to the listed Potential. A base ${maximumBasePotential} plus current selectable bonuses reaches ${maximumBasePotential + maximumExtraPotential}; the client formula has a hard ceiling of ${maximumEffectivePotential}.`,
       ),
     );
     section.append(automatic);
@@ -1755,7 +1764,7 @@
       const allMatch = text.match(/^Six Potentials\s*\+([0-9.]+)$/i);
       if (allMatch) {
         POTENTIAL_STATS.forEach((stat) => {
-          totals[stat.key] += Number(allMatch[1]) || 0;
+          totals[stat.key] = Math.max(totals[stat.key], Number(allMatch[1]) || 0);
         });
         return;
       }
@@ -1763,7 +1772,7 @@
         const match = text.match(group.pattern);
         if (!match) continue;
         group.stats.forEach((stat) => {
-          totals[stat] += Number(match[1]) || 0;
+          totals[stat] = Math.max(totals[stat], Number(match[1]) || 0);
         });
         break;
       }
@@ -1965,6 +1974,33 @@
     return result;
   }
 
+  function projectedStatTotal(stats, label) {
+    const base = Number(stats.base[label] || 0);
+    const added = Number(stats.flat[label] || 0);
+    const percent = Number(stats.percent[label] || 0);
+    const post = Number(stats.postFlat[label] || 0);
+    return Math.floor((base + added) * (1 + percent) + post);
+  }
+
+  function verifiedAccountStatRanges(member, entry) {
+    const maximum = maximumFormCollectionLevel(entry);
+    const levels = Array.from({ length: maximum + 1 }, (_, level) => level);
+    const totals = levels.map((formCollectionLevel) => memberStats(
+      { ...member, formCollectionLevel },
+      entry,
+    ));
+    return Object.fromEntries(STAT_ORDER.map((label) => {
+      const values = totals
+        .filter((stats) => Object.hasOwn(stats.base, label))
+        .map((stats) => projectedStatTotal(stats, label));
+      return [label, {
+        minimum: values.length ? Math.min(...values) : 0,
+        maximum: values.length ? Math.max(...values) : 0,
+        collectionMaximum: maximum,
+      }];
+    }));
+  }
+
   function renderStats(member, entry) {
     const section = el("section", "team-config-section team-stats-section");
     const heading = el("div", "team-section-heading");
@@ -1974,6 +2010,7 @@
     );
     section.append(heading);
     const stats = memberStats(member, entry);
+    const accountRanges = verifiedAccountStatRanges(member, entry);
     const grid = el("div", "team-stat-grid");
     STAT_ORDER.forEach((label) => {
       if (!Object.hasOwn(stats.base, label)) return;
@@ -1981,7 +2018,8 @@
       const added = Number(stats.flat[label] || 0);
       const percent = Number(stats.percent[label] || 0);
       const post = Number(stats.postFlat[label] || 0);
-      const total = Math.floor((base + added) * (1 + percent) + post);
+      const total = projectedStatTotal(stats, label);
+      const accountRange = accountRanges[label];
       const breakdown = [
         formatValue(base, false),
         added ? `+ ${formatValue(added, false)}` : "",
@@ -1994,6 +2032,13 @@
         el("strong", "", formatValue(total, false)),
         el("small", "", added || percent || post ? breakdown : translate("Base value")),
       );
+      if (accountRange?.collectionMaximum && accountRange.minimum !== accountRange.maximum) {
+        card.append(el(
+          "small",
+          "team-stat-range",
+          `Verified account range ${formatValue(accountRange.minimum, false)}-${formatValue(accountRange.maximum, false)}`,
+        ));
+      }
       grid.append(card);
     });
     section.append(grid);
@@ -2040,7 +2085,7 @@
     section.append(el(
       "p",
       "team-data-note",
-      translate("Projected totals use the verified layer order: the configured Aniimo stat formula and effective Potential, cumulative Star-Up training, additive Potential, personality, form-collection, item, and rune modifiers, then final card flooring. Combat-only effects remain separate from the six displayed card stats."),
+      translate("The large value uses the selected per-Aniimo inputs. A verified account range, where shown, spans zero through the highest confirmed Aniimo Forms collection bonus for that family. Temporary or server-synchronized modifiers have no locally proven cap and are not guessed. Totals use the verified layer order and final card flooring; combat-only effects remain separate."),
     ));
     return section;
   }
