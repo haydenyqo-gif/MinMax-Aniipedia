@@ -5,7 +5,7 @@
   const ITEMLOG_URL =
     window.ANIIPEDIA_CONFIG?.itemDataUrl ||
     "./data/itemlog_data.json?v=20260725-catalog-v003";
-  const MECHANICS_URL = "./data/team_builder_mechanics.json?v=20260726-stat-range-v004";
+  const MECHANICS_URL = "./data/team_builder_mechanics.json?v=20260727-potential-formula-v013";
   const LEGACY_STORAGE_KEY = "minmax-aniipedia:team-builder:v1";
   const LOADOUTS_STORAGE_KEY = "minmax-aniipedia:team-loadouts:v1";
   const LOADOUT_FILE_FORMAT = "aniipedia-team-loadout";
@@ -24,11 +24,11 @@
   const MAX_ACTIVE_SKILLS = 2;
   const MIN_ANIIMO_LEVEL = 1;
   const MAX_ANIIMO_LEVEL = 60;
-  const MAX_POTENTIAL_PER_STAT = 20;
+  const MAX_INNATE_POTENTIAL_PER_STAT = 10;
+  const MAX_DIRECT_POTENTIAL_PER_STAT = 20;
+  const MAX_ACQUIRED_POTENTIAL_POOL = 90;
   const MAX_RUNE_POTENTIAL_BONUS = 6;
   const MAX_CARRIED_ITEM_LEVEL = 20;
-  const POTENTIAL_MILESTONE_SIZE = 4;
-  const POTENTIAL_MILESTONE_BONUS = 0.06;
   const INDIVIDUAL_POINT_COEFFICIENT = 0.01961;
   const BUFF_PATTERN = /\b(increas|boost|amplif|bonus|restore|shield|resist|siphon|damage dealt|critical|break efficiency|invincible)/i;
   const STAT_ORDER = ["HP", "Attack", "Break", "Defense", "Magic Defense", "EP Regen"];
@@ -155,7 +155,8 @@
       ultimateSkill: "",
       personalities: [],
       potentials: Object.fromEntries(POTENTIAL_STATS.map((stat) => [stat.key, 0])),
-      formCollectionLevel: 0,
+      awakenMode: "custom",
+      awakenPotentials: Object.fromEntries(POTENTIAL_STATS.map((stat) => [stat.key, 0])),
       carriedItemId: "",
       carriedItemLevel: MAX_CARRIED_ITEM_LEVEL,
       runes: {},
@@ -173,6 +174,7 @@
 
   function normalizeMember(value) {
     const base = defaultMember();
+    const stage = Math.min(7, Math.max(1, Number(value?.stage) || 7));
     const requestedCarriedItemLevel = Number(value?.carriedItemLevel);
     const activeSkills = Array.isArray(value?.activeSkills)
       ? value.activeSkills.slice(0, MAX_ACTIVE_SKILLS).map((skill) => String(skill || ""))
@@ -192,19 +194,29 @@
       .filter(Boolean);
     const potentials = Object.fromEntries(POTENTIAL_STATS.map((stat) => {
       const amount = Number(value?.potentials?.[stat.key]);
-      return [stat.key, Math.min(MAX_POTENTIAL_PER_STAT, Math.max(0, Number.isFinite(amount) ? Math.round(amount) : 0))];
+      return [stat.key, Math.min(MAX_INNATE_POTENTIAL_PER_STAT, Math.max(0, Number.isFinite(amount) ? Math.round(amount) : 0))];
     }));
+    const awakenPotentials = Object.fromEntries(POTENTIAL_STATS.map((stat) => {
+      const amount = Number(value?.awakenPotentials?.[stat.key]);
+      const maximum = MAX_DIRECT_POTENTIAL_PER_STAT - potentials[stat.key];
+      return [stat.key, Math.min(maximum, Math.max(0, Number.isFinite(amount) ? Math.round(amount) : 0))];
+    }));
+    const fittedAwakenPotentials = fitCustomAwakenAllocation({
+      potentials,
+      awakenPotentials,
+    });
     return {
       ...base,
       aniimoId: String(value?.aniimoId || ""),
       level: Math.min(MAX_ANIIMO_LEVEL, Math.max(MIN_ANIIMO_LEVEL, Math.round(Number(value?.level) || MAX_ANIIMO_LEVEL))),
-      stage: Math.min(7, Math.max(1, Number(value?.stage) || 7)),
+      stage,
       activeSkills,
       switchSkill: String(value?.switchSkill || ""),
       ultimateSkill: String(value?.ultimateSkill || ""),
       personalities,
       potentials,
-      formCollectionLevel: Math.max(0, Math.round(Number(value?.formCollectionLevel) || 0)),
+      awakenMode: "custom",
+      awakenPotentials: fittedAwakenPotentials,
       carriedItemId: String(value?.carriedItemId || ""),
       carriedItemLevel: Math.min(
         MAX_CARRIED_ITEM_LEVEL,
@@ -429,7 +441,8 @@
         ultimateSkill: member.ultimateSkill,
         personalities: member.personalities,
         potentials: member.potentials,
-        formCollectionLevel: member.formCollectionLevel,
+        awakenMode: member.awakenMode,
+        awakenPotentials: member.awakenPotentials,
         carriedItemId: member.carriedItemId,
         carriedItemLevel: member.carriedItemLevel,
         runes: Object.entries(member.runes || {}).map(([position, selection]) => ({
@@ -734,26 +747,75 @@
     return mechanics?.stat_projection?.forms?.[formId] || null;
   }
 
-  function formCollectionDefinition(entry) {
-    const familyId = String(statProjectionFor(entry)?.collection_family_id || "");
-    return mechanics?.stat_projection?.collection_families?.[familyId] || null;
+  function awakenDefinition() {
+    return mechanics?.stat_projection?.awaken_potential || {};
   }
 
-  function maximumFormCollectionLevel(entry) {
-    return Math.max(0, Number(formCollectionDefinition(entry)?.max_level) || 0);
-  }
-
-  function formCollectionBonus(member, entry) {
-    const definition = formCollectionDefinition(entry);
-    const level = Math.min(
-      maximumFormCollectionLevel(entry),
-      Math.max(0, Math.round(Number(member?.formCollectionLevel) || 0)),
+  function acquiredPotentialCapacity(member, statKey) {
+    return Math.max(
+      0,
+      MAX_DIRECT_POTENTIAL_PER_STAT - Math.max(0, Number(member.potentials?.[statKey]) || 0),
     );
-    const bonus = definition?.bonuses_by_level?.[String(level)] || null;
-    return {
-      stat: String(bonus?.stat || ""),
-      percent: Number(bonus?.percent || 0),
-    };
+  }
+
+  function acquiredPotentialPoolCapacity(member) {
+    const availableRoom = POTENTIAL_STATS.reduce(
+      (sum, stat) => sum + acquiredPotentialCapacity(member, stat.key),
+      0,
+    );
+    return Math.min(MAX_ACQUIRED_POTENTIAL_POOL, availableRoom);
+  }
+
+  function acquiredPotentialEditableMaximum(member, statKey) {
+    const poolCapacity = acquiredPotentialPoolCapacity(member);
+    const usedByOtherStats = POTENTIAL_STATS.reduce(
+      (sum, stat) => stat.key === statKey
+        ? sum
+        : sum + Math.max(0, Math.round(Number(member.awakenPotentials?.[stat.key]) || 0)),
+      0,
+    );
+    return Math.min(
+      acquiredPotentialCapacity(member, statKey),
+      Math.max(0, poolCapacity - usedByOtherStats),
+    );
+  }
+
+  function fitCustomAwakenAllocation(member) {
+    let remaining = acquiredPotentialPoolCapacity(member);
+    return Object.fromEntries(POTENTIAL_STATS.map((stat) => {
+      const maximum = acquiredPotentialCapacity(member, stat.key);
+      const requested = Math.max(
+        0,
+        Math.round(Number(member.awakenPotentials?.[stat.key]) || 0),
+      );
+      const allocated = Math.min(maximum, remaining, requested);
+      remaining -= allocated;
+      return [stat.key, allocated];
+    }));
+  }
+
+  function awakenAllocation(member) {
+    return fitCustomAwakenAllocation(member);
+  }
+
+  function maximumAccountFormCollectionBonuses() {
+    const totals = {};
+    Object.values(mechanics?.stat_projection?.collection_families || {}).forEach((definition) => {
+      const level = Math.max(0, Number(definition?.max_level) || 0);
+      const bonus = definition?.bonuses_by_level?.[String(level)] || null;
+      const stat = String(bonus?.stat || "");
+      const percent = Number(bonus?.percent || 0);
+      if (stat && Number.isFinite(percent) && percent) {
+        totals[stat] = (totals[stat] || 0) + percent;
+      }
+    });
+    return totals;
+  }
+
+  function unverifiedAccountFormCollectionFamilies() {
+    return Object.values(mechanics?.stat_projection?.collection_families || {})
+      .filter((definition) => definition?.higher_level_unverified)
+      .length;
   }
 
   function compactStatLabel(label) {
@@ -794,7 +856,9 @@
     member.personalities = [];
     member.level = MAX_ANIIMO_LEVEL;
     member.stage = 7;
-    member.formCollectionLevel = 0;
+    member.potentials = Object.fromEntries(POTENTIAL_STATS.map((stat) => [stat.key, 0]));
+    member.awakenMode = "custom";
+    member.awakenPotentials = Object.fromEntries(POTENTIAL_STATS.map((stat) => [stat.key, 0]));
     member.carriedItemId = "";
     member.carriedItemLevel = MAX_CARRIED_ITEM_LEVEL;
     member.runes = {};
@@ -820,11 +884,14 @@
       member.ultimateSkill = (entry.ultimates || []).map(skillKey).find(Boolean) || "";
     }
     member.personalities = normalizeMember({ personalities: member.personalities }).personalities;
+    const normalizedAwaken = normalizeMember({
+      potentials: member.potentials,
+      awakenPotentials: member.awakenPotentials,
+    });
+    member.awakenMode = "custom";
+    member.awakenPotentials = normalizedAwaken.awakenPotentials;
+    member.awakenPotentials = fitCustomAwakenAllocation(member);
     member.stage = Math.min(member.stage, maxStageForLevel(member.level));
-    member.formCollectionLevel = Math.min(
-      maximumFormCollectionLevel(entry),
-      Math.max(0, Math.round(Number(member.formCollectionLevel) || 0)),
-    );
     const item = carriedItemFor(member);
     if (!item) {
       member.carriedItemId = "";
@@ -947,6 +1014,18 @@
     return `${translate("Star-Up")} +${starUpLevel(stageNumber)}`;
   }
 
+  function starUpTierLabel(stageNumber) {
+    const tier = starUpLevel(stageNumber);
+    return `${translate("Star-Up Resonance Tier")} ${tier} (+${tier})`;
+  }
+
+  function progressionStatusLabel(member) {
+    return [
+      `${translate("Level")} ${member.level}`,
+      starUpTierLabel(member.stage),
+    ].join(" · ");
+  }
+
   function renderSidebarSlot(member, index) {
     const entry = aniimoFor(member);
     const card = el("article", "team-sidebar-slot");
@@ -971,7 +1050,7 @@
     const stage = el(
       "span",
       "team-sidebar-slot-stage",
-      entry ? `${translate("Level")} ${member.level} · ${starUpLabel(member.stage)}` : "",
+      entry ? progressionStatusLabel(member) : "",
     );
     header.append(role, stage);
 
@@ -1342,6 +1421,7 @@
     controls.append(selectControl(translate("Aniimo level"), levelOptions, String(member.level), (value) => {
       member.level = Number(value);
       member.stage = Math.min(member.stage, maxStageForLevel(member.level));
+      member.awakenPotentials = fitCustomAwakenAllocation(member);
       persist();
       render();
     }, "team-level-field"));
@@ -1351,10 +1431,10 @@
       .map((stage) => ({
         value: String(stage.stage),
         label: stage.level_gate
-          ? `${starUpLabel(stage.stage)} · ${translate("Level")} ${stage.level_gate}`
-          : starUpLabel(stage.stage),
+          ? `${translate("Tier")} ${starUpLevel(stage.stage)} · ${starUpLabel(stage.stage)} · ${translate("Level")} ${stage.level_gate}`
+          : `${translate("Tier")} ${starUpLevel(stage.stage)} · ${starUpLabel(stage.stage)}`,
       }));
-    controls.append(selectControl(translate("Resonance Star-Up"), stageOptions, String(member.stage), (value) => {
+    controls.append(selectControl(translate("Star-Up Resonance tier"), stageOptions, String(member.stage), (value) => {
       member.stage = Number(value);
       persist();
       render();
@@ -1368,7 +1448,7 @@
     const heading = el("div", "team-section-heading");
     heading.append(
       el("div", "", "Potential & personality"),
-      el("small", "", "Enter base values from 0–20; totals include automatic bonuses"),
+      el("small", "", "Enter the Innate and Acquired values shown by the client"),
     );
     section.append(heading);
 
@@ -1376,15 +1456,17 @@
     const progression = progressionForStage(member.stage);
     const carried = carriedItemFor(member);
     const potentialBonuses = potentialBonusBreakdown(member, progression.bonuses, carried);
+    section.append(el("div", "team-subsection-heading", "Innate Potential"));
     const potentialGrid = el("div", "team-potential-grid");
     POTENTIAL_STATS.forEach((stat) => {
       const control = numberControl(
         stat.label,
         member.potentials?.[stat.key] || 0,
         0,
-        MAX_POTENTIAL_PER_STAT,
+        MAX_INNATE_POTENTIAL_PER_STAT,
         (value) => {
           member.potentials[stat.key] = value;
+          member.awakenPotentials = fitCustomAwakenAllocation(member);
           persist();
           render();
         },
@@ -1394,15 +1476,15 @@
       caption?.append(el(
         "span",
         "team-potential-result",
-        `Total ${formatValue(effectivePotentialValue(member, stat.key, potentialBonuses), false)}`,
+        `Innate ${Number(member.potentials?.[stat.key] || 0)} / ${MAX_INNATE_POTENTIAL_PER_STAT}`,
       ));
       potentialGrid.append(control);
     });
     section.append(potentialGrid);
 
     const automatic = el("div", "team-derived-potential");
-    const maximumBasePotential = Number(
-      mechanics?.stat_projection?.maximum_base_potential || MAX_POTENTIAL_PER_STAT,
+    const maximumDirectPotential = Number(
+      mechanics?.stat_projection?.maximum_direct_potential || MAX_DIRECT_POTENTIAL_PER_STAT,
     );
     const maximumExtraPotential = Number(
       mechanics?.stat_projection?.maximum_extra_potential || 10,
@@ -1417,18 +1499,44 @@
     );
     automatic.append(automaticHeading);
     const automaticSources = el("div", "team-derived-potential-sources");
-    automaticSources.append(
-      el(
+    if (potentialBonuses.finalAllMilestone) {
+      automaticSources.append(el(
         "span",
         "team-pill team-pill--stat",
-        `${starUpLabel(member.stage)}: +${formatValue(potentialBonuses.starUp, false)} to all`,
-      ),
-      el(
+        `${starUpLabel(member.stage)} milestone: +${formatValue(potentialBonuses.finalAllMilestone, false)} to all`,
+      ));
+    }
+    if (potentialBonuses.previousAllMilestones) {
+      automaticSources.append(el(
         "span",
         "team-pill team-pill--stat",
-        `Rune rolls: +${formatValue(potentialBonuses.runes, false)} / ${MAX_RUNE_POTENTIAL_BONUS} to all`,
-      ),
-    );
+        `Earlier all-stat milestone: +${formatValue(potentialBonuses.previousAllMilestones, false)} to all`,
+      ));
+    }
+    const groupedMilestones = potentialBonuses.groupedMilestoneStats || {};
+    const offensiveGrouped = ["Attack", "Break", "HP"]
+      .map((stat) => Number(groupedMilestones[stat] || 0));
+    if (offensiveGrouped.some(Boolean)) {
+      automaticSources.append(el(
+        "span",
+        "team-pill team-pill--stat",
+        `Earlier ATK/BREAK/HP milestone: +${formatValue(Math.max(...offensiveGrouped), false)}`,
+      ));
+    }
+    const defensiveGrouped = ["EP Regen", "Defense", "Magic Defense"]
+      .map((stat) => Number(groupedMilestones[stat] || 0));
+    if (defensiveGrouped.some(Boolean)) {
+      automaticSources.append(el(
+        "span",
+        "team-pill team-pill--stat",
+        `Earlier REGEN/P.DEF/M.DEF milestone: +${formatValue(Math.max(...defensiveGrouped), false)}`,
+      ));
+    }
+    automaticSources.append(el(
+      "span",
+      "team-pill team-pill--stat",
+      `Rune rolls: +${formatValue(potentialBonuses.runes, false)} / ${MAX_RUNE_POTENTIAL_BONUS} to all`,
+    ));
     const carriedEntries = Object.entries(potentialBonuses.carriedStats);
     if (carried && carriedEntries.length) {
       carriedEntries.forEach(([stat, value]) => {
@@ -1445,50 +1553,80 @@
       el(
         "small",
         "team-derived-potential-note",
-        `Star-Up and selected Six Aptitude Stats rune rolls apply to every Potential; unlocked carried-item bonuses apply only to the listed Potential. A base ${maximumBasePotential} plus current selectable bonuses reaches ${maximumBasePotential + maximumExtraPotential}; the client formula has a hard ceiling of ${maximumEffectivePotential}.`,
+        `Star-Up milestones are cumulative: the current milestone, earlier grouped milestones, and earlier all-stat milestones remain active together. Selected Six Aptitude Stats rune rolls apply to every Potential; unlocked carried-item bonuses apply only to the listed Potential. Innate plus Acquired caps at ${maximumDirectPotential}; external bonuses can add ${maximumExtraPotential}, up to ${maximumEffectivePotential}.`,
       ),
     );
     section.append(automatic);
 
-    const collectionDefinition = formCollectionDefinition(entry);
-    const collectionMaximum = maximumFormCollectionLevel(entry);
-    if (collectionMaximum) {
-      const collectionBonus = formCollectionBonus(member, entry);
-      const collectionOptions = Array.from({ length: collectionMaximum + 1 }, (_, level) => ({
-        value: String(level),
-        label: level
-          ? `${level} collected alternate ${level === 1 ? "form" : "forms"}`
-          : "No alternate forms collected",
-      }));
-      const collectionControl = selectControl(
-        "Form collection",
-        collectionOptions,
-        String(Math.min(collectionMaximum, member.formCollectionLevel || 0)),
+    const awaken = el("div", "team-derived-potential team-awaken-potential");
+    const awakenHeading = el("div", "team-derived-potential-heading");
+    const currentAwaken = awakenAllocation(member);
+    const awakenUsed = POTENTIAL_STATS.reduce(
+      (sum, stat) => sum + Number(currentAwaken[stat.key] || 0),
+      0,
+    );
+    const awakenCapacity = acquiredPotentialPoolCapacity(member);
+    awakenHeading.append(
+      el("strong", "", "Acquired Potential"),
+      el("span", "team-derived-potential-total", `${awakenUsed} / ${awakenCapacity} acquired`),
+    );
+    awaken.append(awakenHeading);
+    const awakenGrid = el("div", "team-potential-grid");
+    POTENTIAL_STATS.forEach((stat) => {
+      const maximumAcquired = acquiredPotentialEditableMaximum(member, stat.key);
+      const control = numberControl(
+        stat.label,
+        currentAwaken[stat.key] || 0,
+        0,
+        maximumAcquired,
         (value) => {
-          member.formCollectionLevel = Number(value);
+          member.awakenPotentials[stat.key] = value;
+          member.awakenPotentials = fitCustomAwakenAllocation(member);
           persist();
           render();
         },
-        "team-form-collection-field",
+        "team-potential-field",
       );
-      const caption = collectionControl.querySelector(".team-field-label");
+      const caption = control.querySelector(".team-field-label");
       caption?.append(el(
         "span",
         "team-potential-result",
-        collectionBonus.stat
-          ? `${compactStatLabel(collectionBonus.stat)} +${formatValue(collectionBonus.percent, true)}`
-          : "No bonus",
+        `Total ${Number(member.potentials?.[stat.key] || 0)
+          + Number(currentAwaken[stat.key] || 0)} / ${MAX_DIRECT_POTENTIAL_PER_STAT}`,
       ));
-      section.append(collectionControl);
-    }
-    if (collectionDefinition?.higher_level_unverified) {
-      section.append(el(
-        "p",
-        "team-derived-potential-note",
-        collectionMaximum
-          ? "A higher form-collection level exists, but its bonus is not verified."
-          : "This family has alternate forms, but its form-collection bonus is not verified.",
-      ));
+      awakenGrid.append(control);
+    });
+    awaken.append(awakenGrid);
+    awaken.append(el(
+      "small",
+      "team-derived-potential-note",
+      `Each Innate Potential caps at ${MAX_INNATE_POTENTIAL_PER_STAT}. Acquired Potential uses one shared pool of up to ${MAX_ACQUIRED_POTENTIAL_POOL} and fills each stat toward ${MAX_DIRECT_POTENTIAL_PER_STAT}. A high-Innate Aniimo can need fewer than ${MAX_ACQUIRED_POTENTIAL_POOL} points to cap all six; lower Innate values can use the full pool without capping every stat. Star-Up, rune, and carried-item additions are separate.`,
+    ));
+    section.append(awaken);
+
+    const accountBonuses = maximumAccountFormCollectionBonuses();
+    const accountBonusEntries = Object.entries(accountBonuses);
+    if (accountBonusEntries.length) {
+      const accountCollection = el("div", "team-derived-potential team-account-form-bonuses");
+      accountCollection.append(el("strong", "", "Aniimo Forms account range"));
+      const accountSources = el("div", "team-derived-potential-sources");
+      accountBonusEntries.forEach(([stat, percent]) => {
+        accountSources.append(el(
+          "span",
+          "team-pill team-pill--stat",
+          `${compactStatLabel(stat)} 0-${formatValue(percent, true)}`,
+        ));
+      });
+      const unverifiedFamilies = unverifiedAccountFormCollectionFamilies();
+      accountCollection.append(
+        accountSources,
+        el(
+          "small",
+          "team-derived-potential-note",
+          `Form-collection bonuses are account-wide and apply to every Aniimo. The projected cards show zero-to-configured-maximum ranges.${unverifiedFamilies ? ` ${unverifiedFamilies} families have an additional unverified collection level, so the upper bound may increase after those records are confirmed.` : ""}`,
+        ),
+      );
+      section.append(accountCollection);
     }
 
     const personalityHeading = el("div", "team-subsection-heading");
@@ -1686,11 +1824,12 @@
 
   function progressionForStage(stageNumber) {
     const stages = progressionStages();
+    const completed = stages.filter((stage) => Number(stage.stage) < stageNumber);
     const eligible = stages.filter((stage) => Number(stage.stage) <= stageNumber);
     return {
-      trainingSteps: eligible.flatMap((stage) => (
-        Array.isArray(stage.training_steps) ? stage.training_steps : []
-      )),
+      // Each visible Star-Up tier includes the completed stat rows from every
+      // lower tier. The current tier's rows belong to the next tier transition.
+      statGainSteps: completed.flatMap((stage) => stage.training_steps || []),
       bonuses: eligible.map((stage) => stage.stage_bonus).filter(Boolean),
     };
   }
@@ -1764,7 +1903,7 @@
       const allMatch = text.match(/^Six Potentials\s*\+([0-9.]+)$/i);
       if (allMatch) {
         POTENTIAL_STATS.forEach((stat) => {
-          totals[stat.key] = Math.max(totals[stat.key], Number(allMatch[1]) || 0);
+          totals[stat.key] += Number(allMatch[1]) || 0;
         });
         return;
       }
@@ -1772,7 +1911,7 @@
         const match = text.match(group.pattern);
         if (!match) continue;
         group.stats.forEach((stat) => {
-          totals[stat] = Math.max(totals[stat], Number(match[1]) || 0);
+          totals[stat] += Number(match[1]) || 0;
         });
         break;
       }
@@ -1825,20 +1964,52 @@
     const runes = runePotentialBonus(member);
     const carriedStats = carriedPotentialBonuses(member, carried);
     const starUpValues = [...new Set(Object.values(starUpStats))];
+    let allMilestoneTotal = 0;
+    const finalAllMilestone = bonuses.reduce((maximum, bonus) => {
+      const match = String(bonus).match(/^Six Potentials\s*\+([0-9.]+)$/i);
+      if (!match) return maximum;
+      const value = Number(match[1]) || 0;
+      allMilestoneTotal += value;
+      return Math.max(maximum, value);
+    }, 0);
+    const groupedMilestoneStats = stagePotentialBonuses(
+      bonuses.filter((bonus) => !/^Six Potentials\s*\+/i.test(String(bonus))),
+    );
     return {
       starUp: starUpValues.length === 1 ? starUpValues[0] : 0,
       starUpStats,
+      finalAllMilestone,
+      previousAllMilestones: Math.max(0, allMilestoneTotal - finalAllMilestone),
+      groupedMilestoneStats,
       runes,
       all: starUpValues.length === 1 ? starUpValues[0] + runes : runes,
       carriedStats,
     };
   }
 
+  function baseFormulaPotentialValue(member, statKey, potentialBonuses) {
+    const total = Number(member.potentials?.[statKey] || 0);
+    const maximum = Number(
+      mechanics?.stat_projection?.maximum_innate_potential
+      || MAX_INNATE_POTENTIAL_PER_STAT,
+    );
+    return Math.min(maximum, Math.max(0, total));
+  }
+
+  function oldPotentialValue(member, statKey, potentialBonuses) {
+    const total = baseFormulaPotentialValue(member, statKey, potentialBonuses)
+      + Number(potentialBonuses?.starUpStats?.[statKey] || 0)
+      + Number(potentialBonuses?.runes || 0)
+      + Number(potentialBonuses?.carriedStats?.[statKey] || 0);
+    const maximum = Number(
+      mechanics?.stat_projection?.maximum_effective_potential || 32,
+    );
+    return Math.min(maximum, Math.max(0, total));
+  }
+
   function effectivePotentialValue(member, statKey, potentialBonuses) {
-    const total = Number(member.potentials?.[statKey] || 0)
-      + Number(potentialBonuses.starUpStats?.[statKey] || 0)
-      + Number(potentialBonuses.runes || 0)
-      + Number(potentialBonuses.carriedStats?.[statKey] || 0);
+    const total = oldPotentialValue(member, statKey, potentialBonuses)
+      + Number(member.awakenPotentials?.[statKey] || 0);
     const maximum = Number(
       mechanics?.stat_projection?.maximum_effective_potential || 32,
     );
@@ -1868,16 +2039,58 @@
     POTENTIAL_STATS.forEach((stat) => {
       const effective = effectivePotentialValue(member, stat.key, result.potentialBonuses);
       result.effectivePotentials[stat.key] = effective;
-      const stepSize = Number(
-        mechanics?.stat_projection?.potential_step_size
-        ?? POTENTIAL_MILESTONE_SIZE,
+    });
+  }
+
+  function applyOldPotentialBonuses(result, member) {
+    const threshold = Number(
+      mechanics?.stat_projection?.old_potential_percent?.every || 4,
+    );
+    const percentPerThreshold = Number(
+      mechanics?.stat_projection?.old_potential_percent?.value || 0.06,
+    );
+    if (!(threshold > 0) || !Number.isFinite(percentPerThreshold)) return;
+    POTENTIAL_STATS.forEach(({ key: statKey }) => {
+      const effectiveOldPotential = oldPotentialValue(
+        member,
+        statKey,
+        result.potentialBonuses,
       );
-      const stepPercent = Number(
-        mechanics?.stat_projection?.potential_step_percent
-        ?? POTENTIAL_MILESTONE_BONUS,
-      );
-      const percent = Math.floor(effective / stepSize) * stepPercent;
-      if (percent) addModifier(result, stat.key, percent, true, "Potential");
+      const percent = Math.floor(effectiveOldPotential / threshold) * percentPerThreshold;
+      if (!percent) return;
+      addModifier(result, statKey, percent, true, `Potential: ${statKey}`);
+    });
+  }
+
+  function applyAwakenPotential(result, member, entry) {
+    const allocation = awakenAllocation(member);
+    result.awakenPotentials = allocation;
+    const conversions = awakenDefinition()?.conversions || {};
+    POTENTIAL_STATS.forEach(({ key: sourceStat }) => {
+      const level = Number(allocation[sourceStat] || 0);
+      (conversions[sourceStat] || []).forEach((conversion) => {
+        const every = Number(conversion?.every || 0);
+        const value = Number(conversion?.value || 0);
+        if (!every || !Number.isFinite(value)) return;
+        const amount = Number(level || 0) / every * value;
+        if (!amount) return;
+        if (conversion.card_stat && conversion.stat) {
+          addModifier(
+            result,
+            conversion.stat,
+            amount,
+            Boolean(conversion.is_percent),
+            `Awaken Potential: ${sourceStat}`,
+          );
+          return;
+        }
+        const advancedLabels = {
+          common_skill_cd_dec_rate_v: "Skill cooldown reduction",
+          crit_rate_v: "Critical Rate",
+        };
+        const label = advancedLabels[conversion.attribute] || conversion.attribute || sourceStat;
+        result.advanced[label] = (result.advanced[label] || 0) + amount;
+      });
     });
   }
 
@@ -1895,14 +2108,13 @@
     });
   }
 
-  function applyFormCollectionBonus(result, member, entry) {
-    const bonus = formCollectionBonus(member, entry);
-    if (bonus.stat && bonus.percent) {
-      addModifier(result, bonus.stat, bonus.percent, true, "Form collection");
-    }
+  function applyAccountFormCollectionBonuses(result, bonuses) {
+    Object.entries(bonuses || {}).forEach(([stat, percent]) => {
+      if (percent) addModifier(result, stat, percent, true, "Aniimo Forms collection");
+    });
   }
 
-  function memberStats(member, entry) {
+  function memberStats(member, entry, accountFormBonuses = {}) {
     const result = {
       listed: {},
       base: {},
@@ -1911,9 +2123,13 @@
       percent: {},
       advanced: {},
       effectivePotentials: {},
+      awakenPotentials: {},
       potentialBonuses: {
         starUp: 0,
         starUpStats: Object.fromEntries(POTENTIAL_STATS.map((stat) => [stat.key, 0])),
+        finalAllMilestone: 0,
+        previousAllMilestones: 0,
+        groupedMilestoneStats: Object.fromEntries(POTENTIAL_STATS.map((stat) => [stat.key, 0])),
         runes: 0,
         all: 0,
         carriedStats: {},
@@ -1929,7 +2145,7 @@
     (entry?.stats || []).forEach((stat) => {
       result.listed[stat.label] = Number(stat.value || 0);
       const potentialKey = stat.label === "Magic Attack" ? "Attack" : stat.label;
-      const effectivePotential = effectivePotentialValue(
+      const effectivePotential = baseFormulaPotentialValue(
         member,
         potentialKey,
         result.potentialBonuses,
@@ -1942,8 +2158,8 @@
         effectivePotential,
       );
     });
-    progression.trainingSteps.forEach((step) => {
-      (step.stat_gains || []).forEach((gain) => addFlat(result, gain.label, gain.value, `${translate("Training level")} ${step.level}`));
+    progression.statGainSteps.forEach((step) => {
+      (step.stat_gains || []).forEach((gain) => addFlat(result, gain.label, gain.value, translate("Star-Up Resonance")));
     });
     applyStarUpBonuses(result, result.bonuses);
 
@@ -1969,7 +2185,9 @@
       });
     });
     applyPotentialBonuses(result, member, carried);
-    applyFormCollectionBonus(result, member, entry);
+    applyOldPotentialBonuses(result, member);
+    applyAwakenPotential(result, member, entry);
+    applyAccountFormCollectionBonuses(result, accountFormBonuses);
     applyPersonalityBonuses(result, member);
     return result;
   }
@@ -1983,12 +2201,11 @@
   }
 
   function verifiedAccountStatRanges(member, entry) {
-    const maximum = maximumFormCollectionLevel(entry);
-    const levels = Array.from({ length: maximum + 1 }, (_, level) => level);
-    const totals = levels.map((formCollectionLevel) => memberStats(
-      { ...member, formCollectionLevel },
-      entry,
-    ));
+    const maximumBonuses = maximumAccountFormCollectionBonuses();
+    const totals = [
+      memberStats(member, entry),
+      memberStats(member, entry, maximumBonuses),
+    ];
     return Object.fromEntries(STAT_ORDER.map((label) => {
       const values = totals
         .filter((stats) => Object.hasOwn(stats.base, label))
@@ -1996,7 +2213,7 @@
       return [label, {
         minimum: values.length ? Math.min(...values) : 0,
         maximum: values.length ? Math.max(...values) : 0,
-        collectionMaximum: maximum,
+        collectionPercent: Number(maximumBonuses[label] || 0),
       }];
     }));
   }
@@ -2006,7 +2223,7 @@
     const heading = el("div", "team-section-heading");
     heading.append(
       el("div", "", translate("Projected build stats")),
-      el("small", "", `${translate("Level")} ${member.level} · ${starUpLabel(member.stage)}`),
+      el("small", "", progressionStatusLabel(member)),
     );
     section.append(heading);
     const stats = memberStats(member, entry);
@@ -2032,11 +2249,11 @@
         el("strong", "", formatValue(total, false)),
         el("small", "", added || percent || post ? breakdown : translate("Base value")),
       );
-      if (accountRange?.collectionMaximum && accountRange.minimum !== accountRange.maximum) {
+      if (accountRange?.collectionPercent && accountRange.minimum !== accountRange.maximum) {
         card.append(el(
           "small",
           "team-stat-range",
-          `Verified account range ${formatValue(accountRange.minimum, false)}-${formatValue(accountRange.maximum, false)}`,
+          `Aniimo Forms range ${formatValue(accountRange.minimum, false)}-${formatValue(accountRange.maximum, false)}`,
         ));
       }
       grid.append(card);
@@ -2085,7 +2302,7 @@
     section.append(el(
       "p",
       "team-data-note",
-      translate("The large value uses the selected per-Aniimo inputs. A verified account range, where shown, spans zero through the highest confirmed Aniimo Forms collection bonus for that family. Temporary or server-synchronized modifiers have no locally proven cap and are not guessed. Totals use the verified layer order and final card flooring; combat-only effects remain separate."),
+      translate("The large value uses the current-client species template and the selected per-Aniimo inputs without account-wide form-collection bonuses. Forms and quality do not change the family stat curve. Aniimo caught under an earlier client can retain that client's species points, so an older card can differ from the current-template projection. The Aniimo Forms range aggregates every configured family bonus from zero through the highest confirmed collection level. Totals use the verified layer order and final card flooring; combat-only effects remain separate."),
     ));
     return section;
   }
